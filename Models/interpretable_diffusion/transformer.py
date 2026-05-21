@@ -11,9 +11,7 @@ import os
 
 ## hunote: our backbone network is most same as diffusion-TS. Diffusion-TS backbone has really good potential!!
 class TrendBlock(nn.Module):
-    """
-    Model trend of time series using the polynomial regressor.
-    """
+    """[DEPRECATED] Kept for compatibility. Not used in EEG mode."""
     def __init__(self, in_dim, out_dim, in_feat, out_feat, act):
         super(TrendBlock, self).__init__()
         trend_poly = 3
@@ -23,7 +21,6 @@ class TrendBlock(nn.Module):
             Transpose(shape=(1, 2)),
             nn.Conv1d(in_feat, out_feat, 3, stride=1, padding=1)
         )
-
         lin_space = torch.arange(1, out_dim + 1, 1) / (out_dim + 1)
         self.poly_space = torch.stack([lin_space ** float(p + 1) for p in range(trend_poly)], dim=0)
 
@@ -33,6 +30,97 @@ class TrendBlock(nn.Module):
         trend_vals = torch.matmul(x.transpose(1, 2), self.poly_space.to(x.device))
         trend_vals = trend_vals.transpose(1, 2)
         return trend_vals
+
+
+class EEGBandBlock(nn.Module):
+    """
+    EEG 频带分解模块，替代 TrendBlock + FourierLayer。
+
+    将信号分解为 delta/theta/alpha/beta/gamma 五个频带，
+    每个频带单独建模后融合。
+
+    原理:
+      1. 将嵌入空间投影回时间域 (n_embd → n_feat)
+      2. 对 n_feat 维 (200个时间点) 做 rFFT
+      3. 用固定的频带 mask 提取各频带成分
+      4. 每个频带经过独立的可学习网络
+      5. 融合所有频带输出
+    """
+    # EEG 标准五频带 (Hz)
+    BANDS = {
+        'delta': (1, 4),
+        'theta': (4, 8),
+        'alpha': (8, 13),
+        'beta':  (13, 30),
+        'gamma': (30, 50),
+    }
+
+    def __init__(self, n_channel, n_embd, n_feat, sfreq=200):
+        super().__init__()
+        self.n_feat = n_feat
+        self.sfreq = sfreq
+        self.n_bands = len(self.BANDS)
+
+        # 从嵌入空间投影到时间域
+        self.to_time = nn.Linear(n_embd, n_feat)
+
+        # 每个频带的独立处理网络
+        self.band_nets = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(n_feat, n_feat),
+                nn.GELU(),
+                nn.Linear(n_feat, n_feat),
+            )
+            for _ in range(self.n_bands)
+        ])
+
+        # 可学习的频带权重 (注意力融合)
+        self.band_attention = nn.Sequential(
+            nn.Linear(n_feat * self.n_bands, self.n_bands),
+            nn.Softmax(dim=-1),
+        )
+
+        # 预计算频带 mask (注册为 buffer，不参与训练)
+        n_freq = n_feat // 2 + 1
+        freqs = torch.fft.rfftfreq(n_feat, d=1.0 / sfreq)  # 频率轴 (Hz)
+        masks = []
+        for band_name, (low, high) in self.BANDS.items():
+            mask = ((freqs >= low) & (freqs < high)).float()
+            masks.append(mask)
+        # (n_bands, n_freq)
+        self.register_buffer('band_masks', torch.stack(masks, dim=0))
+
+    def forward(self, x):
+        """
+        x: (batch, n_channel, n_embd) — 来自 Decoder attention 的嵌入表示
+        return: (batch, n_channel, n_feat) — 频带分解后的时间域信号
+        """
+        # 投影到时间域
+        x_time = self.to_time(x)  # (b, c, n_feat)
+
+        # rFFT 沿时间维度
+        x_freq = torch.fft.rfft(x_time, dim=2)  # (b, c, n_freq)
+
+        # 对每个频带做 mask → iFFT → 独立网络处理
+        band_outputs = []
+        for i in range(self.n_bands):
+            mask = self.band_masks[i]  # (n_freq,)
+            x_band_freq = x_freq * mask.unsqueeze(0).unsqueeze(0)  # (b, c, n_freq)
+            x_band = torch.fft.irfft(x_band_freq, n=self.n_feat, dim=2)  # (b, c, n_feat)
+            x_band = self.band_nets[i](x_band)  # (b, c, n_feat)
+            band_outputs.append(x_band)
+
+        # 频带注意力融合
+        # 拼接所有频带 → 计算每个频带的权重
+        concat = torch.cat(band_outputs, dim=2)  # (b, c, n_bands * n_feat)
+        weights = self.band_attention(concat)     # (b, c, n_bands)
+
+        # 加权求和
+        stacked = torch.stack(band_outputs, dim=-1)  # (b, c, n_feat, n_bands)
+        weights = weights.unsqueeze(2)                # (b, c, 1, n_bands)
+        out = (stacked * weights).sum(dim=-1)         # (b, c, n_feat)
+
+        return out
     
 
 class MovingBlock(nn.Module):
@@ -419,9 +507,8 @@ class DecoderBlock(nn.Module):
         assert activate in ['GELU', 'GELU2']
         act = nn.GELU() if activate == 'GELU' else GELU2()
 
-        self.trend = TrendBlock(n_channel, n_channel, n_embd, n_feat, act=act)
-        self.seasonal = FourierLayer(d_model=n_embd)
-
+        # EEG 频带分解 (替代原来的 TrendBlock + FourierLayer)
+        self.band_block = EEGBandBlock(n_channel, n_embd, n_feat, sfreq=200)
 
         self.mlp = nn.Sequential(
             nn.Linear(n_embd, mlp_hidden_times * n_embd),
@@ -430,7 +517,6 @@ class DecoderBlock(nn.Module):
             nn.Dropout(resid_pdrop),
         )
 
-        self.proj = nn.Conv1d(n_channel, n_channel * 2, 1)
         self.linear = nn.Linear(n_embd, n_feat)
 
     def forward(self, x, encoder_output, timestep, mask=None, label_emb=None):
@@ -439,13 +525,14 @@ class DecoderBlock(nn.Module):
 
         a, att = self.attn2(self.ln1_1(x, timestep), encoder_output, mask=mask)
         x = x + a
-        x1, x2 = self.proj(x).chunk(2, dim=1)
-        trend, season = self.trend(x1), self.seasonal(x2)
+
+        # EEG 频带分解 (替代 trend + season)
+        band_out = self.band_block(x)  # (b, c, n_feat)
+
         x = x + self.mlp(self.ln2(x))
 
-
         m = torch.mean(x, dim=1, keepdim=True)
-        return x - m, self.linear(m), trend, season
+        return x - m, self.linear(m), band_out
     
 
 class Decoder(nn.Module):
@@ -481,19 +568,16 @@ class Decoder(nn.Module):
       
     def forward(self, x, t, enc, padding_masks=None, label_emb=None):
         b, c, _ = x.shape
-        # att_weights = []
         mean = []
-        season = torch.zeros((b, c, self.d_model), device=x.device)
-        trend = torch.zeros((b, c, self.n_feat), device=x.device)
+        band = torch.zeros((b, c, self.n_feat), device=x.device)
         for block_idx in range(len(self.blocks)):
-            x, residual_mean, residual_trend, residual_season = \
+            x, residual_mean, residual_band = \
                 self.blocks[block_idx](x, enc, t, mask=padding_masks, label_emb=label_emb)
-            season += residual_season
-            trend += residual_trend
+            band += residual_band
             mean.append(residual_mean)
 
         mean = torch.cat(mean, dim=1)
-        return x, mean, trend, season
+        return x, mean, band
 
 
 class Transformer(nn.Module):
@@ -525,8 +609,6 @@ class Transformer(nn.Module):
         else:
             kernel_size, padding = conv_params
 
-        self.combine_s = nn.Conv1d(n_embd, n_feat, kernel_size=kernel_size, stride=1, padding=padding,
-                                   padding_mode='circular', bias=False)
         self.combine_m = nn.Conv1d(n_layer_dec, 1, kernel_size=1, stride=1, padding=0,
                                    padding_mode='circular', bias=False)
         self.max_len = max_len
@@ -542,15 +624,12 @@ class Transformer(nn.Module):
         enc_cond = self.encoder(inp_enc, t, padding_masks=padding_masks, label_emb=label_emb)
 
         inp_dec = emb
-        output, mean, trend, season = self.decoder(inp_dec, t, enc_cond, padding_masks=padding_masks, label_emb=label_emb)
+        output, mean, band = self.decoder(inp_dec, t, enc_cond, padding_masks=padding_masks, label_emb=label_emb)
 
         res = self.inverse(output)
         res_m = torch.mean(res, dim=1, keepdim=True)
-        season_error = self.combine_s(season.transpose(1, 2)).transpose(1, 2) + res - res_m
-        trend = self.combine_m(mean) + res_m + trend
-        out = trend+season_error
-
-  
+        mean_out = self.combine_m(mean) + res_m
+        out = mean_out + (res - res_m) + band
 
         return out
 
