@@ -1,13 +1,15 @@
 # ============================================================
-# SEED 原始 EEG - 格式 (62通道, 200时间点)
-# seq_length = 62, feature_size = 200
+# SEED 原始 EEG
+# 格式: (62通道, 200时间点)
+# 预处理: 每个trial单独 → 基线校正 → 0.5-50Hz带通 → 50Hz陷波
+# 归一化: 每个文件 z-score → clip(±5) → /5 → [-1,1]
 # ============================================================
 
 model:
   target: Models.interpretable_diffusion.FMTS.FM_TS
   params:
-    seq_length: 62          # 62 个 EEG 通道
-    feature_size: 200       # 200 个时间点
+    seq_length: 62
+    feature_size: 200
     n_layer_enc: 4
     n_layer_dec: 6
     d_model: 128
@@ -35,13 +37,17 @@ dataloader:
       data_root: /root/autodl-tmp/Preprocessed_EEG
       data_type: raw
       window: 200
-      stride: 100
       proportion: 0.8
-      neg_one_to_one: True
-      scaler_type: minmax
       seed: 42
       period: train
       conditional: True
+      # 预处理参数 (每个trial单独处理)
+      sfreq: 200
+      bandpass_low: 0.5
+      bandpass_high: 50.0
+      notch_freq: 50.0
+      notch_width: 2.0
+      baseline_correction: true
 
   batch_size: 128
   shuffle: True

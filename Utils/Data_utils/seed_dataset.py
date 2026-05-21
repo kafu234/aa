@@ -57,6 +57,13 @@ class SEEDDataset(Dataset):
         output_dir="./OUTPUT",
         conditional=True,
         target_label=None,
+        # 预处理参数
+        sfreq=200,              # 采样率 (Hz)
+        bandpass_low=0.5,       # 带通下限 (Hz)，None=不做
+        bandpass_high=50.0,     # 带通上限 (Hz)，None=不做
+        notch_freq=50.0,        # 陷波频率 (Hz)，None=不做
+        notch_width=2.0,        # 陷波带宽 (Hz)
+        baseline_correction=True,  # 基线校正
         **kwargs,
     ):
         super(SEEDDataset, self).__init__()
@@ -64,13 +71,19 @@ class SEEDDataset(Dataset):
 
         self.name = name
         self.window = window
-        self.stride = stride if stride is not None else window
         self.period = period
-        self.auto_norm = neg_one_to_one
         self.conditional = conditional
-
-        # seq_length=62, feature_size=window (FM-TS 需要)
         self.var_num = window
+
+        # 保存预处理参数
+        self.preprocess_cfg = {
+            "sfreq": sfreq,
+            "bandpass_low": bandpass_low,
+            "bandpass_high": bandpass_high,
+            "notch_freq": notch_freq,
+            "notch_width": notch_width,
+            "baseline_correction": baseline_correction,
+        }
 
         # ---- 1. 加载标签 ----
         seed_labels = self._load_labels(data_root)
@@ -78,7 +91,7 @@ class SEEDDataset(Dataset):
         # ---- 2. 按文件加载 + 每个文件单独归一化 + 滑动窗口 ----
         all_samples, all_labels = self._load_and_process(
             data_root, seed_labels, raw_key_suffix,
-            subjects, sessions, window, self.stride, neg_one_to_one
+            subjects, sessions, window
         )
 
         # ---- 3. 按标签过滤 ----
@@ -133,7 +146,7 @@ class SEEDDataset(Dataset):
     # ================================================================
     def _load_and_process(
         self, data_root, seed_labels, raw_key_suffix,
-        subjects, sessions, window, stride, neg_one_to_one
+        subjects, sessions, window
     ):
         mat_files = sorted(glob.glob(os.path.join(data_root, "*.mat")))
         mat_files = [f for f in mat_files if "label" not in os.path.basename(f).lower()]
@@ -165,6 +178,9 @@ class SEEDDataset(Dataset):
                 if len(trials) == 0:
                     continue
 
+                # --- 每个 trial 单独预处理 (避免拼接边界伪迹) ---
+                trials = [self._preprocess_eeg(t) for t in trials]
+
                 # 打印首个文件的 trial-label 对应
                 if first_file:
                     label_names = {0: "neg", 1: "neu", 2: "pos"}
@@ -173,15 +189,11 @@ class SEEDDataset(Dataset):
                         print(f"  trial {i+1}: shape={t.shape}, label={l} ({label_names.get(l, '?')})")
                     first_file = False
 
-                # --- 拼接该文件所有 trial: (62, T_total) ---
+                # --- 拼接预处理后的 trial，用于整文件归一化 ---
                 file_data = np.concatenate(trials, axis=1)  # (62, T_total)
 
-                # --- 每个文件单独归一化: 按通道 MinMaxScale 到 [0,1] ---
+                # --- 每个文件单独归一化: z-score → clip → 映射到 [-1,1] ---
                 file_normed = self._normalize_per_file(file_data)
-
-                # --- 映射到 [-1, 1] ---
-                if neg_one_to_one:
-                    file_normed = file_normed * 2.0 - 1.0
 
                 # --- 滑动窗口切片 + 分配标签 ---
                 offset = 0
@@ -192,16 +204,15 @@ class SEEDDataset(Dataset):
                     offset += T
 
                     if T < window:
-                        # padding
-                        padded = np.zeros((62, window), dtype=np.float32)
-                        padded[:, :T] = trial_normed
-                        all_samples.append(padded)
-                        all_labels.append(label)
-                        continue
+                        continue  # 太短的 trial 直接跳过
 
-                    num_windows = (T - window) // stride + 1
+                    # 裁掉多余的点，让 T 能被 window 整除
+                    usable_T = (T // window) * window
+                    trial_normed = trial_normed[:, :usable_T]  # (62, usable_T)
+
+                    num_windows = usable_T // window
                     for i in range(num_windows):
-                        start = i * stride
+                        start = i * window
                         end = start + window
                         seg = trial_normed[:, start:end]  # (62, window)
                         all_samples.append(seg)
@@ -213,23 +224,68 @@ class SEEDDataset(Dataset):
         return samples, labels
 
     # ================================================================
-    #  每个文件单独归一化: 按通道 MinMaxScale 到 [0,1]
+    #  EEG 预处理 (每个 trial 单独调用，避免边界伪迹)
     # ================================================================
-    def _normalize_per_file(self, data):
+    def _preprocess_eeg(self, data):
         """
-        对 (62, T) 数据按通道做 MinMax 归一化到 [0, 1]。
-        每个通道独立缩放。
+        对单个 trial (62, T) 做预处理。
+
+        流程: 基线校正 → 带通滤波 → 陷波滤波
         """
-        normed = np.zeros_like(data, dtype=np.float32)
-        for ch in range(data.shape[0]):
-            ch_data = data[ch, :]
-            ch_min = ch_data.min()
-            ch_max = ch_data.max()
-            if ch_max - ch_min > 1e-8:
-                normed[ch, :] = (ch_data - ch_min) / (ch_max - ch_min)
-            else:
-                normed[ch, :] = 0.0
-        return normed
+        from scipy.signal import butter, filtfilt, iirnotch
+
+        cfg = self.preprocess_cfg
+        sfreq = cfg["sfreq"]
+
+        # --- 1. 基线校正 ---
+        if cfg["baseline_correction"]:
+            data = data - np.mean(data, axis=1, keepdims=True)
+
+        # --- 2. 带通滤波 ---
+        low = cfg["bandpass_low"]
+        high = cfg["bandpass_high"]
+        if low is not None and high is not None:
+            nyq = sfreq / 2.0
+            high = min(high, nyq - 1.0)
+            if low < high:
+                b, a = butter(N=4, Wn=[low / nyq, high / nyq], btype='band')
+                data = filtfilt(b, a, data, axis=1).astype(np.float32)
+        elif low is not None:
+            nyq = sfreq / 2.0
+            b, a = butter(N=4, Wn=low / nyq, btype='high')
+            data = filtfilt(b, a, data, axis=1).astype(np.float32)
+        elif high is not None:
+            nyq = sfreq / 2.0
+            high = min(high, nyq - 1.0)
+            b, a = butter(N=4, Wn=high / nyq, btype='low')
+            data = filtfilt(b, a, data, axis=1).astype(np.float32)
+
+        # --- 3. 陷波滤波 (去 50Hz 工频) ---
+        notch = cfg["notch_freq"]
+        if notch is not None and notch < sfreq / 2.0:
+            Q = notch / cfg["notch_width"]
+            b, a = iirnotch(notch, Q, sfreq)
+            data = filtfilt(b, a, data, axis=1).astype(np.float32)
+
+        return data
+
+    # ================================================================
+    #  每个文件单独归一化: z-score → clip → 映射到 [-1, 1]
+    # ================================================================
+    def _normalize_per_file(self, data, clip_std=5.0):
+        """
+        对 (62, T) 数据做归一化:
+          1. 每个通道 z-score (零均值, 单位方差)
+          2. clip 到 ±clip_std (去除离群值)
+          3. 除以 clip_std 映射到 [-1, 1]
+        """
+        mean = np.mean(data, axis=1, keepdims=True)  # (62, 1)
+        std = np.std(data, axis=1, keepdims=True)    # (62, 1)
+        std[std < 1e-8] = 1.0
+        normed = (data - mean) / std
+        normed = np.clip(normed, -clip_std, clip_std)
+        normed = normed / clip_std  # 映射到 [-1, 1]
+        return normed.astype(np.float32)
 
     # ================================================================
     #  提取 trial (按数字顺序)

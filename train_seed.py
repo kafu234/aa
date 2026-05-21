@@ -202,7 +202,8 @@ class SEEDTrainer:
         all_samples = []
         all_labels = []
 
-        for start in range(0, num_samples, batch_size):
+        total_batches = (num_samples + batch_size - 1) // batch_size
+        for start in tqdm(range(0, num_samples, batch_size), total=total_batches, desc="Generating"):
             bs = min(batch_size, num_samples - start)
 
             if labels is None:
@@ -350,9 +351,9 @@ def main():
         # 无条件生成
         samples, labels = trainer.generate(num_gen)
 
-    # 反归一化
-    if train_dataset.auto_norm:
-        samples = unnormalize_to_zero_to_one(samples)
+    # 恢复到 z-score 尺度: 模型输出 [-1,1] → ×5 → z-score 空间
+    CLIP_STD = 5.0
+    samples = samples * CLIP_STD
 
     # 保存: 只输出一个打包文件
     save_dir = args.results_dir
