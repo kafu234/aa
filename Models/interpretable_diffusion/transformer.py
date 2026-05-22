@@ -9,7 +9,138 @@ from Models.interpretable_diffusion.model_utils import LearnablePositionalEncodi
                                                        AdaLayerNorm, Transpose, RMSNorm, GELU2, series_decomp
 import os
 
-## hunote: our backbone network is most same as diffusion-TS. Diffusion-TS backbone has really good potential!!
+
+# ============================================================
+#  SEED 62-channel electrode coordinates (10-20 system)
+#  2D azimuthal equidistant projection, normalized to [-1, 1]
+# ============================================================
+
+SEED_62_CHANNELS = [
+    'FP1','FPZ','FP2','AF3','AF4',
+    'F7','F5','F3','F1','FZ','F2','F4','F6','F8',
+    'FT7','FC5','FC3','FC1','FCZ','FC2','FC4','FC6','FT8',
+    'T7','C5','C3','C1','CZ','C2','C4','C6','T8',
+    'TP7','CP5','CP3','CP1','CPZ','CP2','CP4','CP6','TP8',
+    'P7','P5','P3','P1','PZ','P2','P4','P6','P8',
+    'PO7','PO5','PO3','POZ','PO4','PO6','PO8',
+    'CB1','O1','OZ','O2','CB2',
+]
+
+def _get_seed_62_coords():
+    """
+    Return (62, 3) tensor: 2D projected coordinates + z from unit sphere.
+    x: left(-) / right(+),  y: anterior(+) / posterior(-)
+    """
+    coords_2d = {
+        # Frontal-polar
+        'FP1': (-0.15, 0.92), 'FPZ': (0.00, 0.95), 'FP2': (0.15, 0.92),
+        'AF3': (-0.25, 0.82), 'AF4': (0.25, 0.82),
+        # Frontal
+        'F7': (-0.70, 0.60), 'F5': (-0.52, 0.60), 'F3': (-0.35, 0.60),
+        'F1': (-0.15, 0.60), 'FZ': (0.00, 0.60), 'F2': (0.15, 0.60),
+        'F4': (0.35, 0.60), 'F6': (0.52, 0.60), 'F8': (0.70, 0.60),
+        # Frontal-central
+        'FT7': (-0.80, 0.35), 'FC5': (-0.55, 0.35), 'FC3': (-0.35, 0.35),
+        'FC1': (-0.15, 0.35), 'FCZ': (0.00, 0.35), 'FC2': (0.15, 0.35),
+        'FC4': (0.35, 0.35), 'FC6': (0.55, 0.35), 'FT8': (0.80, 0.35),
+        # Central
+        'T7': (-0.90, 0.00), 'C5': (-0.58, 0.00), 'C3': (-0.35, 0.00),
+        'C1': (-0.15, 0.00), 'CZ': (0.00, 0.00), 'C2': (0.15, 0.00),
+        'C4': (0.35, 0.00), 'C6': (0.58, 0.00), 'T8': (0.90, 0.00),
+        # Central-parietal
+        'TP7': (-0.80, -0.35), 'CP5': (-0.55, -0.35), 'CP3': (-0.35, -0.35),
+        'CP1': (-0.15, -0.35), 'CPZ': (0.00, -0.35), 'CP2': (0.15, -0.35),
+        'CP4': (0.35, -0.35), 'CP6': (0.55, -0.35), 'TP8': (0.80, -0.35),
+        # Parietal
+        'P7': (-0.70, -0.60), 'P5': (-0.52, -0.60), 'P3': (-0.35, -0.60),
+        'P1': (-0.15, -0.60), 'PZ': (0.00, -0.60), 'P2': (0.15, -0.60),
+        'P4': (0.35, -0.60), 'P6': (0.52, -0.60), 'P8': (0.70, -0.60),
+        # Parietal-occipital
+        'PO7': (-0.55, -0.78), 'PO5': (-0.38, -0.78), 'PO3': (-0.22, -0.78),
+        'POZ': (0.00, -0.78), 'PO4': (0.22, -0.78), 'PO6': (0.38, -0.78),
+        'PO8': (0.55, -0.78),
+        # Occipital
+        'CB1': (-0.35, -0.92), 'O1': (-0.15, -0.92), 'OZ': (0.00, -0.95),
+        'O2': (0.15, -0.92), 'CB2': (0.35, -0.92),
+    }
+    xy = []
+    for ch in SEED_62_CHANNELS:
+        xy.append(coords_2d[ch])
+    xy = torch.tensor(xy, dtype=torch.float32)  # (62, 2)
+
+    # Add z from unit sphere: z = sqrt(1 - x^2 - y^2), clamped
+    r2 = (xy ** 2).sum(dim=1, keepdim=True).clamp(max=0.99)
+    z = torch.sqrt(1.0 - r2)
+    coords_3d = torch.cat([xy, z], dim=1)  # (62, 3)
+    return coords_3d
+
+
+# ============================================================
+#  Spatial modules
+# ============================================================
+
+class SpatialPositionalEncoding(nn.Module):
+    """
+    Inject electrode 3D coordinates as positional encoding.
+    Added after token embedding, before encoder/decoder input.
+    """
+    def __init__(self, n_channels=62, d_model=256):
+        super().__init__()
+        coords = _get_seed_62_coords()  # (62, 3)
+        self.register_buffer('coords', coords)
+        self.proj = nn.Sequential(
+            nn.Linear(3, d_model),
+            nn.GELU(),
+            nn.Linear(d_model, d_model),
+        )
+        # Scale factor: start small so it doesn't destabilize early training
+        self.scale = nn.Parameter(torch.tensor(0.1))
+
+    def forward(self, x):
+        """x: (batch, n_channels, d_model)"""
+        spatial_emb = self.proj(self.coords)  # (62, d_model)
+        return x + self.scale * spatial_emb.unsqueeze(0)
+
+
+class SpatialAttentionBias(nn.Module):
+    """
+    Per-head learnable soft spatial bias for attention.
+    
+    Each head learns (alpha, beta):
+        bias[h, i, j] = alpha_h * dist(i, j) + beta_h
+    
+    - alpha < 0  →  head focuses on nearby electrodes (local)
+    - alpha ≈ 0  →  head ignores distance (global, like vanilla attention)
+    - alpha > 0  →  head prefers distant electrodes (cross-region connectivity)
+    
+    This replaces hard graph masking with a fully differentiable, 
+    data-driven spatial prior that each head learns independently.
+    """
+    def __init__(self, n_channels, n_head):
+        super().__init__()
+        coords = _get_seed_62_coords()
+        # Pairwise distance matrix, normalized to [0, 1]
+        dist = torch.cdist(coords.unsqueeze(0), coords.unsqueeze(0)).squeeze(0)
+        dist = dist / dist.max()
+        self.register_buffer('dist_matrix', dist)  # (C, C)
+
+        # Per-head learnable parameters
+        # Initialize alpha slightly negative → mild local preference as starting point
+        self.head_alpha = nn.Parameter(torch.randn(n_head) * 0.1 - 0.3)
+        self.head_beta  = nn.Parameter(torch.zeros(n_head))
+
+    def forward(self):
+        """Returns (1, n_head, C, C) bias to add to attention logits."""
+        alpha = self.head_alpha.view(1, -1, 1, 1)  # (1, nh, 1, 1)
+        beta  = self.head_beta.view(1, -1, 1, 1)
+        dist  = self.dist_matrix.unsqueeze(0).unsqueeze(0)  # (1, 1, C, C)
+        return alpha * dist + beta
+
+
+# ============================================================
+#  Original blocks (kept as-is)
+# ============================================================
+
 class TrendBlock(nn.Module):
     """[DEPRECATED] Kept for compatibility. Not used in EEG mode."""
     def __init__(self, in_dim, out_dim, in_feat, out_feat, act):
@@ -35,18 +166,7 @@ class TrendBlock(nn.Module):
 class EEGBandBlock(nn.Module):
     """
     EEG 频带分解模块，替代 TrendBlock + FourierLayer。
-
-    将信号分解为 delta/theta/alpha/beta/gamma 五个频带，
-    每个频带单独建模后融合。
-
-    原理:
-      1. 将嵌入空间投影回时间域 (n_embd → n_feat)
-      2. 对 n_feat 维 (200个时间点) 做 rFFT
-      3. 用固定的频带 mask 提取各频带成分
-      4. 每个频带经过独立的可学习网络
-      5. 融合所有频带输出
     """
-    # EEG 标准五频带 (Hz)
     BANDS = {
         'delta': (1, 4),
         'theta': (4, 8),
@@ -61,10 +181,7 @@ class EEGBandBlock(nn.Module):
         self.sfreq = sfreq
         self.n_bands = len(self.BANDS)
 
-        # 从嵌入空间投影到时间域
         self.to_time = nn.Linear(n_embd, n_feat)
-
-        # 每个频带的独立处理网络
         self.band_nets = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(n_feat, n_feat),
@@ -74,59 +191,40 @@ class EEGBandBlock(nn.Module):
             for _ in range(self.n_bands)
         ])
 
-        # 可学习的频带权重 (注意力融合)
         self.band_attention = nn.Sequential(
             nn.Linear(n_feat * self.n_bands, self.n_bands),
             nn.Softmax(dim=-1),
         )
 
-        # 预计算频带 mask (注册为 buffer，不参与训练)
         n_freq = n_feat // 2 + 1
-        freqs = torch.fft.rfftfreq(n_feat, d=1.0 / sfreq)  # 频率轴 (Hz)
+        freqs = torch.fft.rfftfreq(n_feat, d=1.0 / sfreq)
         masks = []
         for band_name, (low, high) in self.BANDS.items():
             mask = ((freqs >= low) & (freqs < high)).float()
             masks.append(mask)
-        # (n_bands, n_freq)
         self.register_buffer('band_masks', torch.stack(masks, dim=0))
 
     def forward(self, x):
-        """
-        x: (batch, n_channel, n_embd) — 来自 Decoder attention 的嵌入表示
-        return: (batch, n_channel, n_feat) — 频带分解后的时间域信号
-        """
-        # 投影到时间域
-        x_time = self.to_time(x)  # (b, c, n_feat)
+        x_time = self.to_time(x)
+        x_freq = torch.fft.rfft(x_time, dim=2)
 
-        # rFFT 沿时间维度
-        x_freq = torch.fft.rfft(x_time, dim=2)  # (b, c, n_freq)
-
-        # 对每个频带做 mask → iFFT → 独立网络处理
         band_outputs = []
         for i in range(self.n_bands):
-            mask = self.band_masks[i]  # (n_freq,)
-            x_band_freq = x_freq * mask.unsqueeze(0).unsqueeze(0)  # (b, c, n_freq)
-            x_band = torch.fft.irfft(x_band_freq, n=self.n_feat, dim=2)  # (b, c, n_feat)
-            x_band = self.band_nets[i](x_band)  # (b, c, n_feat)
+            mask = self.band_masks[i]
+            x_band_freq = x_freq * mask.unsqueeze(0).unsqueeze(0)
+            x_band = torch.fft.irfft(x_band_freq, n=self.n_feat, dim=2)
+            x_band = self.band_nets[i](x_band)
             band_outputs.append(x_band)
 
-        # 频带注意力融合
-        # 拼接所有频带 → 计算每个频带的权重
-        concat = torch.cat(band_outputs, dim=2)  # (b, c, n_bands * n_feat)
-        weights = self.band_attention(concat)     # (b, c, n_bands)
-
-        # 加权求和
-        stacked = torch.stack(band_outputs, dim=-1)  # (b, c, n_feat, n_bands)
-        weights = weights.unsqueeze(2)                # (b, c, 1, n_bands)
-        out = (stacked * weights).sum(dim=-1)         # (b, c, n_feat)
-
+        concat = torch.cat(band_outputs, dim=2)
+        weights = self.band_attention(concat)
+        stacked = torch.stack(band_outputs, dim=-1)
+        weights = weights.unsqueeze(2)
+        out = (stacked * weights).sum(dim=-1)
         return out
-    
+
 
 class MovingBlock(nn.Module):
-    """
-    Model trend of time series using the moving average.
-    """
     def __init__(self, out_dim):
         super(MovingBlock, self).__init__()
         size = max(min(int(out_dim / 4), 24), 4)
@@ -139,9 +237,6 @@ class MovingBlock(nn.Module):
 
 
 class FourierLayer(nn.Module):
-    """
-    Model seasonality of time series using the inverse DFT.
-    """
     def __init__(self, d_model, low_freq=1, factor=1):
         super().__init__()
         self.d_model = d_model
@@ -149,17 +244,14 @@ class FourierLayer(nn.Module):
         self.low_freq = low_freq
 
     def forward(self, x):
-        """x: (b, t, d)"""
         b, t, d = x.shape
         x_freq = torch.fft.rfft(x, dim=1)
-
         if t % 2 == 0:
             x_freq = x_freq[:, self.low_freq:-1]
             f = torch.fft.rfftfreq(t)[self.low_freq:-1]
         else:
             x_freq = x_freq[:, self.low_freq:]
             f = torch.fft.rfftfreq(t)[self.low_freq:]
-
         x_freq, index_tuple = self.topk_freq(x_freq)
         f = repeat(f, 'f -> b f d', b=x_freq.size(0), d=x_freq.size(2)).to(x_freq.device)
         f = rearrange(f[index_tuple], 'b f d -> b f () d').to(x_freq.device)
@@ -170,7 +262,6 @@ class FourierLayer(nn.Module):
         f = torch.cat([f, -f], dim=1)
         t = rearrange(torch.arange(t, dtype=torch.float),
                       't -> () () t ()').to(x_freq.device)
-
         amp = rearrange(x_freq.abs(), 'b f d -> b f () d')
         phase = rearrange(x_freq.angle(), 'b f d -> b f () d')
         x_time = amp * torch.cos(2 * math.pi * f * t + phase)
@@ -184,12 +275,9 @@ class FourierLayer(nn.Module):
         index_tuple = (mesh_a.unsqueeze(1), indices, mesh_b.unsqueeze(1))
         x_freq = x_freq[index_tuple]
         return x_freq, index_tuple
-    
+
 
 class SeasonBlock(nn.Module):
-    """
-    Model seasonality of time series using the Fourier series.
-    """
     def __init__(self, in_dim, out_dim, factor=1):
         super(SeasonBlock, self).__init__()
         season_poly = factor * min(32, int(out_dim // 2))
@@ -209,24 +297,25 @@ class SeasonBlock(nn.Module):
         return season_vals
 
 
-### precompute_freqs_cis/reshape_for_broadcast/apply_rotary_emb are rope code adapted from LLama code
+# ============================================================
+#  RoPE helpers (unchanged)
+# ============================================================
+
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device, dtype=torch.float32)
     freqs = torch.outer(t, freqs)
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
     return freqs_cis
+
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     ndim = x.ndim
     assert 0 <= 1 < ndim
     assert freqs_cis.shape == (x.shape[1], x.shape[-1])
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
     return freqs_cis.view(*shape)
-def apply_rotary_emb(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    freqs_cis: torch.Tensor,
-):
+
+def apply_rotary_emb(xq, xk, freqs_cis):
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
     freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
@@ -234,14 +323,19 @@ def apply_rotary_emb(
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
+
+# ============================================================
+#  Attention with spatial bias  [MODIFIED]
+# ============================================================
+
 class FullAttention(nn.Module):
     def __init__(self,
-                 n_embd, # the embed dim
-                 n_head, # the number of heads
-                 attn_pdrop=0.1, # attention dropout prob
-                 resid_pdrop=0.1, # residual attention dropout prob
-                 max_len = None
-                 
+                 n_embd,
+                 n_head,
+                 n_channel=62,         # ← NEW
+                 attn_pdrop=0.1,
+                 resid_pdrop=0.1,
+                 max_len=None
     ):
         super().__init__()
         assert n_embd % n_head == 0
@@ -261,75 +355,71 @@ class FullAttention(nn.Module):
 
         self.freqs_cis = precompute_freqs_cis(
             n_embd // n_head,
-            max_len * 4,  ## if we use register, the overall length can be longer.
-            50000,  ## 
+            max_len * 4,
+            50000,
         )
 
-     
         self.regi_num = 128
         self.register = nn.Parameter(torch.randn([1, self.regi_num, n_embd]))
 
+        # ---- Spatial attention bias (NEW) ----
+        self.spatial_bias = SpatialAttentionBias(n_channel, n_head)
 
     def forward(self, x, mask=None):
-        # x = torch.cat([self.register.repeat(x.shape[0],1,1), x], 1)
-
         B, T, C = x.size()
         k = self.key(x)
         q = self.query(x)
         v = self.value(x)
 
-
         k = self.k_norm(k) + 0.1*k
         q = self.q_norm(q) + 0.1*q
 
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
 
         if int(os.environ.get('hucfg_attention_rope_use', '-1')) == 1: 
             freqs_cis = self.freqs_cis.cuda()[0 : T]
             q, k = apply_rotary_emb(q.permute(0,2,1,3), k.permute(0,2,1,3), freqs_cis=freqs_cis)
             q, k = q.permute(0,2,1,3), k.permute(0,2,1,3)
 
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
 
+        # ---- Add spatial bias before softmax (NEW) ----
+        # spatial_bias: (1, n_head, C, C),  att: (B, n_head, T, T)
+        # Only apply when T matches n_channel (skip if registers change seq len)
+        sp_bias = self.spatial_bias()  # (1, nh, C, C)
+        if T == sp_bias.shape[-1]:
+            att = att + sp_bias
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) # (B, nh, T, T)
-
-        att = F.softmax(att, dim=-1) # (B, nh, T, T)
-        # att = torch.sigmoid(att)
+        att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side, (B, T, C)
-        att = att.mean(dim=1, keepdim=False) # (B, T, T)
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        att = att.mean(dim=1, keepdim=False)
 
-        # output projection
         y = self.resid_drop(self.proj(y))
-        # y = y[:,self.regi_num:,:]
-
         return y, att
 
 
 class CrossAttention(nn.Module):
     def __init__(self,
-                 n_embd, # the embed dim
-                 condition_embd, # condition dim
-                 n_head, # the number of heads
-                 attn_pdrop=0.1, # attention dropout prob
-                 resid_pdrop=0.1, # residual attention dropout prob
-                 max_len = None
+                 n_embd,
+                 condition_embd,
+                 n_head,
+                 n_channel=62,         # ← NEW
+                 attn_pdrop=0.1,
+                 resid_pdrop=0.1,
+                 max_len=None
     ):
         super().__init__()
         assert n_embd % n_head == 0
-        # key, query, value projections for all heads
         self.key = nn.Linear(condition_embd, n_embd)
         self.query = nn.Linear(n_embd, n_embd)
         self.value = nn.Linear(condition_embd, n_embd)
         
-        # regularization
         self.attn_drop = nn.Dropout(attn_pdrop)
         self.resid_drop = nn.Dropout(resid_pdrop)
-        # output projection
         self.proj = nn.Linear(n_embd, n_embd)
         self.n_head = n_head
 
@@ -339,70 +429,66 @@ class CrossAttention(nn.Module):
         self.freqs_cis = precompute_freqs_cis(
             n_embd // n_head,
             max_len * 4,
-            50000,  ## hucfg913
+            50000,
         )
-     
 
         self.regi_num = 128
         self.register = nn.Parameter(torch.randn([1, self.regi_num, n_embd]))
         self.register_2 = nn.Parameter(torch.randn([1, self.regi_num, n_embd]))
 
+        # ---- Spatial attention bias (NEW) ----
+        # Cross-attention: Q=decoder channels, K=encoder channels → same spatial layout
+        self.spatial_bias = SpatialAttentionBias(n_channel, n_head)
 
     def forward(self, x, encoder_output, mask=None):
-        
-        # x = torch.cat([self.register.repeat(x.shape[0],1,1), x], 1)
-
-        # encoder_output = torch.cat([self.register_2.repeat(x.shape[0],1,1), encoder_output], 1)
-
-        
         B, T, C = x.size()
         B, T_E, _ = encoder_output.size()
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+
         k = self.key(encoder_output)
         q = self.query(x)
 
-
-
-        k = self.k_norm(k) + 0.1*k  ## residual qk norm
+        k = self.k_norm(k) + 0.1*k
         q = self.q_norm(q) + 0.1*q
 
         k = k.view(B, T_E, self.n_head, C // self.n_head).transpose(1, 2)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
 
         freqs_cis = self.freqs_cis.cuda()[0 : T]
         q, k = apply_rotary_emb(q.permute(0,2,1,3), k.permute(0,2,1,3), freqs_cis=freqs_cis)
         q, k = q.permute(0,2,1,3), k.permute(0,2,1,3)
 
-        
+        v = self.value(encoder_output).view(B, T_E, self.n_head, C // self.n_head).transpose(1, 2)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
 
-        v = self.value(encoder_output).view(B, T_E, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) # (B, nh, T, T)
+        # ---- Add spatial bias (NEW) ----
+        sp_bias = self.spatial_bias()
+        if T == sp_bias.shape[-1] and T_E == sp_bias.shape[-1]:
+            att = att + sp_bias
 
-        att = F.softmax(att, dim=-1) # (B, nh, T, T)
-        # att = torch.sigmoid(att)  ## sigmoid attention infact 
-
+        att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side, (B, T, C)
-        att = att.mean(dim=1, keepdim=False) # (B, T, T)
-
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        att = att.mean(dim=1, keepdim=False)
 
         y = self.resid_drop(self.proj(y))
-        # y = y[:,self.regi_num:,:]
-
         return y, att
         
 
+# ============================================================
+#  Encoder / Decoder blocks — pass n_channel through  [MODIFIED]
+# ============================================================
+
 class EncoderBlock(nn.Module):
-    """ an unassuming Transformer block """
     def __init__(self,
                  n_embd=1024,
                  n_head=16,
+                 n_channel=62,         # ← NEW
                  attn_pdrop=0.1,
                  resid_pdrop=0.1,
                  mlp_hidden_times=4,
                  activate='GELU',
-                 max_len = None
+                 max_len=None
                  ):
         super().__init__()
 
@@ -411,9 +497,10 @@ class EncoderBlock(nn.Module):
         self.attn = FullAttention(
                 n_embd=n_embd,
                 n_head=n_head,
+                n_channel=n_channel,   # ← NEW
                 attn_pdrop=attn_pdrop,
                 resid_pdrop=resid_pdrop,
-                max_len = max_len
+                max_len=max_len
             )
         
         assert activate in ['GELU', 'GELU2']
@@ -429,7 +516,7 @@ class EncoderBlock(nn.Module):
     def forward(self, x, timestep, mask=None, label_emb=None):
         a, att = self.attn(self.ln1(x, timestep, label_emb), mask=mask)
         x = x + a
-        x = x + self.mlp(self.ln2(x))   # only one really use encoder_output
+        x = x + self.mlp(self.ln2(x))
         return x, att
 
 
@@ -439,34 +526,34 @@ class Encoder(nn.Module):
         n_layer=14,
         n_embd=1024,
         n_head=16,
+        n_channel=62,              # ← NEW
         attn_pdrop=0.,
         resid_pdrop=0.,
         mlp_hidden_times=4,
         block_activate='GELU',
-        max_len = None
+        max_len=None
     ):
         super().__init__()
 
         self.blocks = nn.Sequential(*[EncoderBlock(
                 n_embd=n_embd,
                 n_head=n_head,
+                n_channel=n_channel,   # ← NEW
                 attn_pdrop=attn_pdrop,
                 resid_pdrop=resid_pdrop,
                 mlp_hidden_times=mlp_hidden_times,
                 activate=block_activate,
-                max_len = max_len
+                max_len=max_len
         ) for _ in range(n_layer)])
 
     def forward(self, input, t, padding_masks=None, label_emb=None):
         x = input
-        
         for block_idx in range(len(self.blocks)):
             x, _ = self.blocks[block_idx](x, t, mask=padding_masks, label_emb=label_emb)
         return x
 
 
 class DecoderBlock(nn.Module):
-    """ an unassuming Transformer block """
     def __init__(self,
                  n_channel,
                  n_feat,
@@ -477,37 +564,36 @@ class DecoderBlock(nn.Module):
                  mlp_hidden_times=4,
                  activate='GELU',
                  condition_dim=1024,
-                 max_len = None
+                 max_len=None
                  ):
         super().__init__()
         
         self.ln1 = AdaLayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
-        # self.ln2 = AdaLayerNorm(n_embd)
 
         self.attn1 = FullAttention(
                 n_embd=n_embd,
                 n_head=n_head,
+                n_channel=n_channel,   # ← NEW
                 attn_pdrop=attn_pdrop, 
                 resid_pdrop=resid_pdrop,
-                max_len = max_len
+                max_len=max_len
                 )
         self.attn2 = CrossAttention(
                 n_embd=n_embd,
                 condition_embd=condition_dim,
                 n_head=n_head,
+                n_channel=n_channel,   # ← NEW
                 attn_pdrop=attn_pdrop,
                 resid_pdrop=resid_pdrop,
-                max_len = max_len
+                max_len=max_len
                 )
         
         self.ln1_1 = AdaLayerNorm(n_embd)
-        # self.ln1_1 = nn.LayerNorm(n_embd)
 
         assert activate in ['GELU', 'GELU2']
         act = nn.GELU() if activate == 'GELU' else GELU2()
 
-        # EEG 频带分解 (替代原来的 TrendBlock + FourierLayer)
         self.band_block = EEGBandBlock(n_channel, n_embd, n_feat, sfreq=200)
 
         self.mlp = nn.Sequential(
@@ -526,8 +612,7 @@ class DecoderBlock(nn.Module):
         a, att = self.attn2(self.ln1_1(x, timestep), encoder_output, mask=mask)
         x = x + a
 
-        # EEG 频带分解 (替代 trend + season)
-        band_out = self.band_block(x)  # (b, c, n_feat)
+        band_out = self.band_block(x)
 
         x = x + self.mlp(self.ln2(x))
 
@@ -548,7 +633,7 @@ class Decoder(nn.Module):
         mlp_hidden_times=4,
         block_activate='GELU',
         condition_dim=512,
-        max_len = None
+        max_len=None
     ):
       super().__init__()
       self.d_model = n_embd
@@ -563,7 +648,7 @@ class Decoder(nn.Module):
                 mlp_hidden_times=mlp_hidden_times,
                 activate=block_activate,
                 condition_dim=condition_dim,
-                max_len = max_len
+                max_len=max_len
         ) for _ in range(n_layer)])
       
     def forward(self, x, t, enc, padding_masks=None, label_emb=None):
@@ -579,6 +664,10 @@ class Decoder(nn.Module):
         mean = torch.cat(mean, dim=1)
         return x, mean, band
 
+
+# ============================================================
+#  Main Transformer — with SpatialPositionalEncoding  [MODIFIED]
+# ============================================================
 
 class Transformer(nn.Module):
     def __init__(
@@ -612,13 +701,32 @@ class Transformer(nn.Module):
         self.combine_m = nn.Conv1d(n_layer_dec, 1, kernel_size=1, stride=1, padding=0,
                                    padding_mode='circular', bias=False)
         self.max_len = max_len
-        self.encoder = Encoder(n_layer_enc, n_embd, n_heads, attn_pdrop, resid_pdrop, mlp_hidden_times, block_activate, max_len = self.max_len)
 
-        self.decoder = Decoder(n_channel, n_feat, n_embd, n_heads, n_layer_dec, attn_pdrop, resid_pdrop, mlp_hidden_times,
-                               block_activate, condition_dim=n_embd, max_len = self.max_len)
+        # ---- Spatial positional encoding (NEW) ----
+        self.spatial_pe = SpatialPositionalEncoding(n_channel, n_embd)
+
+        # ---- Pass n_channel to encoder (NEW) ----
+        self.encoder = Encoder(
+            n_layer_enc, n_embd, n_heads,
+            n_channel=n_channel,       # ← NEW
+            attn_pdrop=attn_pdrop, resid_pdrop=resid_pdrop,
+            mlp_hidden_times=mlp_hidden_times,
+            block_activate=block_activate, max_len=self.max_len
+        )
+
+        self.decoder = Decoder(
+            n_channel, n_feat, n_embd, n_heads, n_layer_dec,
+            attn_pdrop=attn_pdrop, resid_pdrop=resid_pdrop,
+            mlp_hidden_times=mlp_hidden_times,
+            block_activate=block_activate, condition_dim=n_embd,
+            max_len=self.max_len
+        )
 
     def forward(self, input, t, padding_masks=None, return_res=False, label_emb=None):
         emb = self.emb(input)
+
+        # ---- Inject spatial structure (NEW) ----
+        emb = self.spatial_pe(emb)
 
         inp_enc = emb
         enc_cond = self.encoder(inp_enc, t, padding_masks=padding_masks, label_emb=label_emb)
