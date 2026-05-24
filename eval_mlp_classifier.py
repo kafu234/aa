@@ -2,27 +2,27 @@
 eval_mlp_classifier.py — DE特征 + 分类器评估生成数据质量
 =========================================================
 
-思路:
+设计原则:
   1. GPU 上提取 5 频带 DE 特征: (B, 62, 200) → (B, 62, 5)
-  2. 用一个轻量 Transformer 分类器 (带空间位置编码)
-  3. 不加任何数据增强技巧 (无 Mixup / Label Smoothing)
-     → 保证对比的公平性: 性能差异只来自生成数据本身
+  2. 轻量 Transformer 分类器 (带空间位置编码)
+  3. 不加任何数据增强技巧 (无 Mixup / Label Smoothing / DASM / Warmup)
+     → 保证对比公平: 性能差异只来自生成数据本身的质量
+
+数据划分:
+  默认 --split_mode session (SEED 标准协议):
+    每个被试 session 1+2 → 训练, session 3 → 测试
 
 用法:
-    # baseline (只用原始数据)
-    python eval_mlp_classifier.py \
-        --data_root /root/autodl-tmp/Preprocessed_EEG --no_synthetic
-
-    # 原始 + 生成数据
-    python eval_mlp_classifier.py \
-        --data_root /root/autodl-tmp/Preprocessed_EEG \
-        --synthetic_path /root/autodl-tmp/result/generated_SEED_RAW_200.npz
-
     # 自动对比 (推荐)
     python eval_mlp_classifier.py \
         --data_root /root/autodl-tmp/Preprocessed_EEG \
         --synthetic_path /root/autodl-tmp/result/generated_SEED_RAW_200.npz \
         --compare
+
+    # 只跑 baseline
+    python eval_mlp_classifier.py \
+        --data_root /root/autodl-tmp/Preprocessed_EEG \
+        --no_synthetic
 """
 
 import os
@@ -44,49 +44,87 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 # ============================================================
-#  SEED 62-channel electrode 3D coordinates (10-20 system)
+#  SEED 62-channel electrode 3D coordinates
+#  Source: MNE-Python standard_1020 montage
+#  CB1/CB2: interpolated from midpoint of (O1,PO7) and (O2,PO8)
+#  Coordinate: x(left-/right+), y(posterior-/anterior+), z(inferior-/superior+)
+#  Unit: meters
 # ============================================================
 
-SEED_62_CHANNELS = [
-    'FP1','FPZ','FP2','AF3','AF4',
-    'F7','F5','F3','F1','FZ','F2','F4','F6','F8',
-    'FT7','FC5','FC3','FC1','FCZ','FC2','FC4','FC6','FT8',
-    'T7','C5','C3','C1','CZ','C2','C4','C6','T8',
-    'TP7','CP5','CP3','CP1','CPZ','CP2','CP4','CP6','TP8',
-    'P7','P5','P3','P1','PZ','P2','P4','P6','P8',
-    'PO7','PO5','PO3','POZ','PO4','PO6','PO8',
-    'CB1','O1','OZ','O2','CB2',
-]
-
 def _get_seed_62_coords():
-    coords_2d = {
-        'FP1': (-0.15, 0.92), 'FPZ': (0.00, 0.95), 'FP2': (0.15, 0.92),
-        'AF3': (-0.25, 0.82), 'AF4': (0.25, 0.82),
-        'F7': (-0.70, 0.60), 'F5': (-0.52, 0.60), 'F3': (-0.35, 0.60),
-        'F1': (-0.15, 0.60), 'FZ': (0.00, 0.60), 'F2': (0.15, 0.60),
-        'F4': (0.35, 0.60), 'F6': (0.52, 0.60), 'F8': (0.70, 0.60),
-        'FT7': (-0.80, 0.35), 'FC5': (-0.55, 0.35), 'FC3': (-0.35, 0.35),
-        'FC1': (-0.15, 0.35), 'FCZ': (0.00, 0.35), 'FC2': (0.15, 0.35),
-        'FC4': (0.35, 0.35), 'FC6': (0.55, 0.35), 'FT8': (0.80, 0.35),
-        'T7': (-0.90, 0.00), 'C5': (-0.58, 0.00), 'C3': (-0.35, 0.00),
-        'C1': (-0.15, 0.00), 'CZ': (0.00, 0.00), 'C2': (0.15, 0.00),
-        'C4': (0.35, 0.00), 'C6': (0.58, 0.00), 'T8': (0.90, 0.00),
-        'TP7': (-0.80, -0.35), 'CP5': (-0.55, -0.35), 'CP3': (-0.35, -0.35),
-        'CP1': (-0.15, -0.35), 'CPZ': (0.00, -0.35), 'CP2': (0.15, -0.35),
-        'CP4': (0.35, -0.35), 'CP6': (0.55, -0.35), 'TP8': (0.80, -0.35),
-        'P7': (-0.70, -0.60), 'P5': (-0.52, -0.60), 'P3': (-0.35, -0.60),
-        'P1': (-0.15, -0.60), 'PZ': (0.00, -0.60), 'P2': (0.15, -0.60),
-        'P4': (0.35, -0.60), 'P6': (0.52, -0.60), 'P8': (0.70, -0.60),
-        'PO7': (-0.55, -0.78), 'PO5': (-0.38, -0.78), 'PO3': (-0.22, -0.78),
-        'POZ': (0.00, -0.78), 'PO4': (0.22, -0.78), 'PO6': (0.38, -0.78),
-        'PO8': (0.55, -0.78),
-        'CB1': (-0.35, -0.92), 'O1': (-0.15, -0.92), 'OZ': (0.00, -0.95),
-        'O2': (0.15, -0.92), 'CB2': (0.35, -0.92),
-    }
-    xy = torch.tensor([coords_2d[ch] for ch in SEED_62_CHANNELS], dtype=torch.float32)
-    r2 = (xy ** 2).sum(dim=1, keepdim=True).clamp(max=0.99)
-    z = torch.sqrt(1.0 - r2)
-    return torch.cat([xy, z], dim=1)  # (62, 3)
+    """
+    SEED 62-channel 3D electrode coordinates (meters).
+    Source: MNE-Python standard_1020 montage (mne.channels.make_standard_montage).
+    CB1/CB2 (cerebellar): interpolated from O1/O2 + PO7/PO8.
+    Returns: (62, 3) tensor
+    """
+    # fmt: off
+    coords = torch.tensor([
+        [-0.029437,  0.083917, -0.006990],  # FP1
+        [ 0.000112,  0.088247, -0.001713],  # FPZ
+        [ 0.029872,  0.084896, -0.007080],  # FP2
+        [-0.033701,  0.076837,  0.021227],  # AF3
+        [ 0.035712,  0.077726,  0.021956],  # AF4
+        [-0.070263,  0.042474, -0.011420],  # F7
+        [-0.064466,  0.048035,  0.016921],  # F5
+        [-0.050244,  0.053111,  0.042192],  # F3
+        [-0.027496,  0.056931,  0.060342],  # F1
+        [ 0.000312,  0.058512,  0.066462],  # FZ
+        [ 0.029514,  0.057602,  0.059540],  # F2
+        [ 0.051836,  0.054305,  0.040814],  # F4
+        [ 0.067914,  0.049830,  0.016367],  # F6
+        [ 0.073043,  0.044422, -0.012000],  # F8
+        [-0.080775,  0.014120, -0.011135],  # FT7
+        [-0.077215,  0.018643,  0.024460],  # FC5
+        [-0.060182,  0.022716,  0.055544],  # FC3
+        [-0.034062,  0.026011,  0.079987],  # FC1
+        [ 0.000376,  0.027390,  0.088668],  # FCZ
+        [ 0.034784,  0.026438,  0.078808],  # FC2
+        [ 0.062293,  0.023723,  0.055630],  # FC4
+        [ 0.079534,  0.019936,  0.024438],  # FC6
+        [ 0.081815,  0.015417, -0.011330],  # FT8
+        [-0.084161, -0.016019, -0.009346],  # T7
+        [-0.080280, -0.013760,  0.029160],  # C5
+        [-0.065358, -0.011632,  0.064358],  # C3
+        [-0.036158, -0.009984,  0.089752],  # C1
+        [ 0.000401, -0.009167,  0.100244],  # CZ
+        [ 0.037672, -0.009624,  0.088412],  # C2
+        [ 0.067118, -0.010900,  0.063580],  # C4
+        [ 0.083456, -0.012776,  0.029208],  # C6
+        [ 0.085080, -0.015020, -0.009490],  # T8
+        [-0.084830, -0.046022, -0.007056],  # TP7
+        [-0.079592, -0.046551,  0.030949],  # CP5
+        [-0.063556, -0.047009,  0.065624],  # CP3
+        [-0.035513, -0.047292,  0.091315],  # CP1
+        [ 0.000386, -0.047318,  0.099432],  # CPZ
+        [ 0.038384, -0.047073,  0.090695],  # CP2
+        [ 0.066612, -0.046637,  0.065580],  # CP4
+        [ 0.083322, -0.046101,  0.031206],  # CP6
+        [ 0.085549, -0.045545, -0.007130],  # TP8
+        [-0.072434, -0.073453, -0.002487],  # P7
+        [-0.067272, -0.076291,  0.028382],  # P5
+        [-0.053007, -0.078788,  0.055940],  # P3
+        [-0.028620, -0.080525,  0.075436],  # P1
+        [ 0.000325, -0.081115,  0.082615],  # PZ
+        [ 0.031920, -0.080487,  0.076716],  # P2
+        [ 0.055667, -0.078560,  0.056561],  # P4
+        [ 0.067888, -0.075904,  0.028091],  # P6
+        [ 0.073056, -0.073068, -0.002540],  # P8
+        [-0.054840, -0.097528,  0.002792],  # PO7
+        [-0.048424, -0.099341,  0.021599],  # PO5
+        [-0.036511, -0.100853,  0.037167],  # PO3
+        [ 0.000216, -0.102178,  0.050608],  # POZ
+        [ 0.036782, -0.100849,  0.036397],  # PO4
+        [ 0.049820, -0.099446,  0.021727],  # PO6
+        [ 0.055667, -0.097625,  0.002730],  # PO8
+        [-0.042127, -0.120449,  0.000815],  # CB1 (interpolated)
+        [-0.029413, -0.112449,  0.008839],  # O1
+        [ 0.000108, -0.114892,  0.014657],  # OZ
+        [ 0.029843, -0.112156,  0.008800],  # O2
+        [ 0.042755, -0.120156,  0.000765],  # CB2 (interpolated)
+    ], dtype=torch.float32)
+    # fmt: on
+    return coords  # (62, 3)
 
 
 # ============================================================
@@ -100,35 +138,28 @@ class DEFeatureExtractor(nn.Module):
     对每个通道、每个频带:
       FFT → 频带 mask → IFFT → 方差 → DE = 0.5 * log(2πe * σ²)
 
-    Input:  (B, 62, 200) raw EEG
-    Output: (B, 62, 5)   五频带 DE
-    """
-    BANDS = {
-        'delta': (1, 4),
-        'theta': (4, 8),
-        'alpha': (8, 13),
-        'beta':  (13, 30),
-        'gamma': (30, 50),
-    }
+    支持任意窗口长度 (200, 400, 800 等), mask 在 forward 时动态计算.
 
-    def __init__(self, n_timepoints=200, sfreq=200):
+    Input:  (B, 62, T) raw EEG
+    Output: (B, 62, 5)  五频带 DE
+    """
+    BANDS = [(1, 4), (4, 8), (8, 13), (13, 30), (30, 50)]
+
+    def __init__(self, sfreq=200):
         super().__init__()
-        freqs = torch.fft.rfftfreq(n_timepoints, d=1.0 / sfreq)
-        masks = []
-        for _, (low, high) in self.BANDS.items():
-            masks.append(((freqs >= low) & (freqs < high)).float())
-        self.register_buffer('band_masks', torch.stack(masks))  # (5, n_freq)
-        self.n_timepoints = n_timepoints
+        self.sfreq = sfreq
         self.log_2pie = 0.5 * np.log(2 * np.pi * np.e)
 
     @torch.no_grad()
     def forward(self, x):
-        """x: (B, 62, 200) → (B, 62, 5)"""
+        """x: (B, 62, T) → (B, 62, 5), T 可以是任意长度"""
         T = x.shape[-1]
+        freqs = torch.fft.rfftfreq(T, d=1.0 / self.sfreq).to(x.device)
         x_fft = torch.fft.rfft(x, dim=-1)
+
         de_bands = []
-        for i in range(len(self.BANDS)):
-            mask = self.band_masks[i]
+        for low, high in self.BANDS:
+            mask = ((freqs >= low) & (freqs < high)).float()
             x_band = torch.fft.irfft(x_fft * mask, n=T, dim=-1)
             var = x_band.var(dim=-1, keepdim=True).clamp(min=1e-10)
             de_bands.append(0.5 * torch.log(var) + self.log_2pie)
@@ -204,43 +235,58 @@ class DEClassifier(nn.Module):
 
 
 # ============================================================
-#  数据加载
+#  数据加载 (支持 session 划分)
 # ============================================================
 
-def load_original_data(data_root, window=200, seed=42):
+def load_data_by_session(data_root, window=200, seed=42, split_mode="session",
+                         subject=None, train_trials=None, test_trials=None):
+    """
+    返回 (train_data, train_labels, test_data, test_labels).
+
+    split_mode="session": session 1+2 训练, session 3 测试 (SEED 标准协议).
+    split_mode="trial":   每个 session 前 9 个 trial 训练, 后 6 个 trial 测试.
+    split_mode="random":  随机 60/40 划分.
+    subject: None=所有被试, int=指定被试编号 (1-15).
+    """
     from Utils.Data_utils.seed_dataset import SEEDDataset
-    ds = SEEDDataset(
+
+    subjects = [subject] if subject is not None else None
+
+    common = dict(
         name="SEED_RAW", data_root=data_root, data_type="raw",
-        window=window, proportion=1.0, seed=seed, period="train",
-        conditional=True, sfreq=200, bandpass_low=0.5, bandpass_high=50.0,
+        window=window, proportion=1.0, seed=seed,
+        conditional=True, sfreq=200,
+        bandpass_low=0.5, bandpass_high=50.0,
         notch_freq=50.0, notch_width=2.0, baseline_correction=True,
+        split_mode=split_mode,
+        subjects=subjects,
     )
-    return ds.samples, ds.labels
+    if train_trials is not None:
+        common["train_trials"] = train_trials
+    if test_trials is not None:
+        common["test_trials"] = test_trials
+
+    ds_train = SEEDDataset(**common, period="train")
+    ds_test  = SEEDDataset(**common, period="test")
+
+    subj_str = f"被试 {subject}" if subject is not None else "所有被试"
+    print(f"[{subj_str}] Train: {ds_train.samples.shape[0]} samples, "
+          f"labels: {dict(zip(*np.unique(ds_train.labels, return_counts=True)))}")
+    print(f"[{subj_str}] Test:  {ds_test.samples.shape[0]} samples, "
+          f"labels: {dict(zip(*np.unique(ds_test.labels, return_counts=True)))}")
+
+    return ds_train.samples, ds_train.labels, ds_test.samples, ds_test.labels
 
 
 def load_synthetic_data(synthetic_path):
+    """加载生成数据."""
     bundle = np.load(synthetic_path)
     data, labels = bundle["data"], bundle["labels"]
     CLIP_STD = 5.0
     data = np.clip(data / CLIP_STD, -1.0, 1.0)
-    print(f"[Synthetic] {data.shape[0]} samples, shape {data.shape}, labels {np.unique(labels)}")
+    print(f"[Synthetic] {data.shape[0]} samples, shape {data.shape}, "
+          f"labels {dict(zip(*np.unique(labels, return_counts=True)))}")
     return data.astype(np.float32), labels.astype(np.int64)
-
-
-def split_data(data, labels, train_ratio=0.6, seed=42):
-    np.random.seed(seed)
-    indices = np.arange(len(labels))
-    train_idx, test_idx = [], []
-    for c in np.unique(labels):
-        c_idx = indices[labels == c]
-        np.random.shuffle(c_idx)
-        n_train = int(len(c_idx) * train_ratio)
-        train_idx.extend(c_idx[:n_train])
-        test_idx.extend(c_idx[n_train:])
-    train_idx, test_idx = np.array(train_idx), np.array(test_idx)
-    np.random.shuffle(train_idx)
-    np.random.shuffle(test_idx)
-    return data[train_idx], labels[train_idx], data[test_idx], labels[test_idx]
 
 
 # ============================================================
@@ -251,7 +297,7 @@ def train_and_evaluate(
     train_data, train_labels, test_data, test_labels,
     epochs=150, batch_size=512, lr=3e-4,
     weight_decay=1e-4, device="cpu", verbose=True, run_name="",
-    d_model=128, n_heads=4, n_layers=3,
+    d_model=128, n_heads=4, n_layers=3, dropout=0.3,
 ):
     X_train = torch.from_numpy(train_data).float()
     y_train = torch.from_numpy(train_labels).long()
@@ -274,7 +320,7 @@ def train_and_evaluate(
     class_weights = torch.from_numpy(class_weights).to(device)
 
     model = DEClassifier(
-        d_model=d_model, n_heads=n_heads, n_layers=n_layers,
+        d_model=d_model, n_heads=n_heads, n_layers=n_layers, dropout=dropout,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -362,9 +408,10 @@ def train_and_evaluate(
                 print(f"  Early stopping at epoch {epoch} (best={best_epoch})")
             break
 
-    # ---- Final eval ----
+    # ---- Final eval with best model ----
     model.load_state_dict(best_state)
     model.to(device).eval()
+
     all_preds, all_true = [], []
     with torch.no_grad():
         for xb, yb in test_loader:
@@ -405,7 +452,7 @@ def train_and_evaluate(
 
 
 # ============================================================
-#  打印
+#  打印结果
 # ============================================================
 
 def print_results(results, title="Results"):
@@ -478,43 +525,74 @@ def print_comparison(res_no_syn, res_with_syn):
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="DE特征 + 分类器评估生成数据质量")
+    parser = argparse.ArgumentParser(
+        description="DE特征 + 分类器评估生成数据质量"
+    )
     parser.add_argument("--data_root", type=str, required=True)
     parser.add_argument("--synthetic_path", type=str, default=None)
     parser.add_argument("--no_synthetic", action="store_true")
     parser.add_argument("--compare", action="store_true")
-    parser.add_argument("--train_ratio", type=float, default=0.6)
+    parser.add_argument("--split_mode", type=str, default="session",
+                        choices=["random", "session", "trial"],
+                        help="session=前2session训/第3session测, trial=每session前9trial训/后6trial测, random=随机")
+    parser.add_argument("--subject", type=int, default=None,
+                        help="指定被试编号 (1-15), 不指定则使用所有被试")
+    parser.add_argument("--train_trials", type=str, default=None,
+                        help="训练用的 trial 编号, 如 '0,1,2,3,4,5,6,7,8' (默认前9个)")
+    parser.add_argument("--test_trials", type=str, default=None,
+                        help="测试用的 trial 编号, 如 '9,10,11,12,13,14' (默认后6个)")
     parser.add_argument("--window", type=int, default=200)
     parser.add_argument("--seed", type=int, default=42)
+
+    # 训练超参数
     parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
+
+    # 模型超参数
     parser.add_argument("--d_model", type=int, default=128)
     parser.add_argument("--n_heads", type=int, default=4)
     parser.add_argument("--n_layers", type=int, default=3)
-    parser.add_argument("--syn_ratio", type=float, default=1.0)
+
+    parser.add_argument("--syn_ratio", type=float, default=1.0,
+                        help="使用多少比例的生成数据 (可 >1.0, 会重复采样)")
+    parser.add_argument("--dropout", type=float, default=0.3,
+                        help="分类器 dropout (默认 0.3)")
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--n_runs", type=int, default=3)
+
     args = parser.parse_args()
-
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    subj_str = f"被试 {args.subject}" if args.subject else "所有被试"
+    print(f"Device: {device}, Split: {args.split_mode}, {subj_str}")
 
-    # ---- 加载原始数据 ----
-    print("\n加载原始 SEED 数据...")
-    orig_data, orig_labels = load_original_data(args.data_root, args.window, args.seed)
-    print(f"原始数据: {orig_data.shape}, 标签: {dict(zip(*np.unique(orig_labels, return_counts=True)))}")
+    # ---- 加载数据 (按 session/trial 划分) ----
+    print(f"\n加载 SEED 数据...")
+    train_trials = [int(x) for x in args.train_trials.split(",")] if args.train_trials else None
+    test_trials = [int(x) for x in args.test_trials.split(",")] if args.test_trials else None
+    train_orig, train_orig_labels, test_data, test_labels = load_data_by_session(
+        args.data_root, args.window, args.seed, args.split_mode, args.subject,
+        train_trials, test_trials,
+    )
 
     # ---- 加载生成数据 ----
     syn_data, syn_labels = None, None
     if args.synthetic_path and not args.no_synthetic:
         print("\n加载生成数据...")
         syn_data, syn_labels = load_synthetic_data(args.synthetic_path)
-        if args.syn_ratio < 1.0:
-            n_use = int(len(syn_labels) * args.syn_ratio)
-            idx = np.random.choice(len(syn_labels), n_use, replace=False)
-            syn_data, syn_labels = syn_data[idx], syn_labels[idx]
+        if args.syn_ratio != 1.0:
+            n_target = int(len(syn_labels) * args.syn_ratio)
+            if n_target > len(syn_labels):
+                # syn_ratio > 1.0: 重复采样放大
+                repeats = int(np.ceil(n_target / len(syn_labels)))
+                syn_data = np.tile(syn_data, (repeats, 1, 1))[:n_target]
+                syn_labels = np.tile(syn_labels, repeats)[:n_target]
+            else:
+                # syn_ratio < 1.0: 随机采样缩小
+                idx = np.random.choice(len(syn_labels), n_target, replace=False)
+                syn_data, syn_labels = syn_data[idx], syn_labels[idx]
+            print(f"使用 syn_ratio={args.syn_ratio}: {len(syn_labels)} 生成样本")
 
     # ---- 运行模式 ----
     if args.compare:
@@ -533,9 +611,6 @@ def main():
 
         for run_i in range(args.n_runs):
             run_seed = args.seed + run_i
-            train_orig, train_orig_labels, test_data, test_labels = split_data(
-                orig_data, orig_labels, args.train_ratio, run_seed,
-            )
 
             if mode == "with_synthetic":
                 train_data = np.concatenate([train_orig, syn_data], axis=0)
@@ -557,7 +632,8 @@ def main():
                 epochs=args.epochs, batch_size=args.batch_size,
                 lr=args.lr, weight_decay=args.weight_decay,
                 device=device, verbose=True, run_name=rn,
-                d_model=args.d_model, n_heads=args.n_heads, n_layers=args.n_layers,
+                d_model=args.d_model, n_heads=args.n_heads,
+                n_layers=args.n_layers, dropout=args.dropout,
             )
             run_accs.append(results["accuracy"])
             run_f1s.append(results["f1_macro"])

@@ -1,0 +1,51 @@
+# ============================================================
+# SEED 原始 EEG — 4秒窗口 (800点)
+# 格式: (62通道, 800时间点)
+# 相比200点: DE特征更稳定, 频率分辨率更高
+# ============================================================
+
+model:
+  target: Models.interpretable_diffusion.FMTS.FM_TS
+  params:
+    seq_length: 62
+    feature_size: 800          # ← 200 → 800 (4秒)
+    n_layer_enc: 4
+    n_layer_dec: 6
+    d_model: 256
+    n_heads: 8
+    mlp_hidden_times: 4
+    attn_pd: 0.0
+    resid_pd: 0.1
+    kernel_size: 5
+    padding_size: 2
+
+solver:
+  base_lr: 5.0e-5
+  max_epochs: 10000
+  gradient_accumulate_every: 1
+  save_cycle: 1000
+  ema:
+    decay: 0.995
+    update_interval: 10
+
+dataloader:
+  train_dataset:
+    target: Utils.Data_utils.seed_dataset.SEEDDataset
+    params:
+      name: SEED_RAW
+      data_root: /root/autodl-tmp/Preprocessed_EEG
+      data_type: raw
+      window: 800              # ← 200 → 800 (4秒)
+      proportion: 0.8
+      seed: 42
+      period: train
+      conditional: True
+      sfreq: 200
+      bandpass_low: 0.5
+      bandpass_high: 50.0
+      notch_freq: 50.0
+      notch_width: 2.0
+      baseline_correction: true
+
+  batch_size: 64               # ← 窗口变大, batch 减半避免显存不足
+  shuffle: True

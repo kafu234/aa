@@ -57,6 +57,11 @@ class SEEDDataset(Dataset):
         output_dir="./OUTPUT",
         conditional=True,
         target_label=None,
+        split_mode="random",        # ← "random", "session", 或 "trial"
+        train_sessions=(0, 1),      # ← session 划分用
+        test_sessions=(2,),         # ← session 划分用
+        train_trials=None,          # ← trial 划分用, 如 list(range(9))
+        test_trials=None,           # ← trial 划分用, 如 list(range(9,15))
         # 预处理参数
         sfreq=200,              # 采样率 (Hz)
         bandpass_low=0.5,       # 带通下限 (Hz)，None=不做
@@ -74,6 +79,11 @@ class SEEDDataset(Dataset):
         self.period = period
         self.conditional = conditional
         self.var_num = window
+        self.split_mode = split_mode
+        self.train_sessions = train_sessions
+        self.test_sessions = test_sessions
+        self.train_trials = train_trials if train_trials is not None else list(range(9))
+        self.test_trials = test_trials if test_trials is not None else list(range(9, 15))
 
         # 保存预处理参数
         self.preprocess_cfg = {
@@ -89,7 +99,7 @@ class SEEDDataset(Dataset):
         seed_labels = self._load_labels(data_root)
 
         # ---- 2. 按文件加载 + 每个文件单独归一化 + 滑动窗口 ----
-        all_samples, all_labels = self._load_and_process(
+        all_samples, all_labels, all_sessions, all_trials = self._load_and_process(
             data_root, seed_labels, raw_key_suffix,
             subjects, sessions, window
         )
@@ -99,11 +109,24 @@ class SEEDDataset(Dataset):
             mask = all_labels == target_label
             all_samples = all_samples[mask]
             all_labels = all_labels[mask]
+            all_sessions = all_sessions[mask]
+            all_trials = all_trials[mask]
 
         # ---- 4. 训练/测试划分 ----
-        train_data, train_labels, test_data, test_labels = self._split(
-            all_samples, all_labels, proportion, seed
-        )
+        if split_mode == "session":
+            train_data, train_labels, test_data, test_labels = self._split_by_session(
+                all_samples, all_labels, all_sessions,
+                train_sessions, test_sessions,
+            )
+        elif split_mode == "trial":
+            train_data, train_labels, test_data, test_labels = self._split_by_trial(
+                all_samples, all_labels, all_trials,
+                self.train_trials, self.test_trials,
+            )
+        else:
+            train_data, train_labels, test_data, test_labels = self._split(
+                all_samples, all_labels, proportion, seed
+            )
 
         if period == "train":
             self.samples = train_data
@@ -159,6 +182,8 @@ class SEEDDataset(Dataset):
 
         all_samples = []
         all_labels = []
+        all_sessions = []
+        all_trials = []
         first_file = True
 
         for subj_idx, subj_sessions in file_groups.items():
@@ -197,7 +222,7 @@ class SEEDDataset(Dataset):
 
                 # --- 滑动窗口切片 + 分配标签 ---
                 offset = 0
-                for trial_data, label in zip(trials, trial_labels):
+                for trial_idx, (trial_data, label) in enumerate(zip(trials, trial_labels)):
                     T = trial_data.shape[1]  # 该 trial 的时间长度
                     # 在归一化后的数据中取对应段
                     trial_normed = file_normed[:, offset:offset + T]  # (62, T)
@@ -217,11 +242,18 @@ class SEEDDataset(Dataset):
                         seg = trial_normed[:, start:end]  # (62, window)
                         all_samples.append(seg)
                         all_labels.append(label)
+                        all_sessions.append(sess_idx)
+                        all_trials.append(trial_idx)
 
         samples = np.stack(all_samples, axis=0).astype(np.float32)  # (N, 62, window)
         labels = np.array(all_labels, dtype=np.int64)
+        sessions_arr = np.array(all_sessions, dtype=np.int64)
+        trials_arr = np.array(all_trials, dtype=np.int64)
         print(f"[SEEDDataset] Total samples: {samples.shape[0]}, shape per sample: ({samples.shape[1]}, {samples.shape[2]})")
-        return samples, labels
+        if len(np.unique(sessions_arr)) > 1:
+            for s in sorted(np.unique(sessions_arr)):
+                print(f"  session {s}: {(sessions_arr == s).sum()} samples")
+        return samples, labels, sessions_arr, trials_arr
 
     # ================================================================
     #  EEG 预处理 (每个 trial 单独调用，避免边界伪迹)
@@ -362,6 +394,44 @@ class SEEDDataset(Dataset):
         train_labels = labels[train_idx]
         test_data = data[test_idx] if len(test_idx) > 0 else data[:1]
         test_labels = labels[test_idx] if len(test_idx) > 0 else labels[:1]
+        return train_data, train_labels, test_data, test_labels
+
+    def _split_by_session(self, data, labels, sessions,
+                          train_sessions=(0, 1), test_sessions=(2,)):
+        """
+        按 session 划分: 前两个 session 训练, 第三个 session 测试.
+        这是 SEED 数据集的标准评估协议 (within-subject cross-session).
+        """
+        train_mask = np.isin(sessions, train_sessions)
+        test_mask = np.isin(sessions, test_sessions)
+
+        train_data = data[train_mask]
+        train_labels = labels[train_mask]
+        test_data = data[test_mask]
+        test_labels = labels[test_mask]
+
+        print(f"[Session Split] train sessions={train_sessions}: {train_mask.sum()} samples, "
+              f"test sessions={test_sessions}: {test_mask.sum()} samples")
+        return train_data, train_labels, test_data, test_labels
+
+    def _split_by_trial(self, data, labels, trials,
+                        train_trials=list(range(9)), test_trials=list(range(9, 15))):
+        """
+        按 trial 划分: 每个 session 的前 9 个 trial 训练, 后 6 个 trial 测试.
+        SEED 每个 session 有 15 个 trial (trial index 0-14).
+        """
+        train_mask = np.isin(trials, train_trials)
+        test_mask = np.isin(trials, test_trials)
+
+        train_data = data[train_mask]
+        train_labels = labels[train_mask]
+        test_data = data[test_mask]
+        test_labels = labels[test_mask]
+
+        print(f"[Trial Split] train trials={list(train_trials)}: {train_mask.sum()} samples, "
+              f"test trials={list(test_trials)}: {test_mask.sum()} samples")
+        print(f"  Train labels: {dict(zip(*np.unique(train_labels, return_counts=True)))}")
+        print(f"  Test  labels: {dict(zip(*np.unique(test_labels, return_counts=True)))}")
         return train_data, train_labels, test_data, test_labels
 
     def _save_ground_truth(self, *args):

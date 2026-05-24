@@ -198,20 +198,98 @@ class RMSNorm(torch.nn.Module):
         return (x * rrms).to(dtype=x_dtype) * self.scale
 
 
+class SpatialEmotionConditioner(nn.Module):
+    """
+    通道感知的情绪条件嵌入.
+
+    为每个情绪类别学习 n_modes 个空间激活模式,
+    每个模式 = 空间权重 (哪些脑区) × 特征方向 (怎么调制).
+    多模式组合可以表达复杂的脑区×频带交互:
+      - 模式 1: 左前额 alpha 降低 (正面情绪)
+      - 模式 2: 右前额 alpha 升高 (负面情绪)
+      - 模式 3: 枕区 gamma 变化 (唤醒度)
+
+    Input:  labels (B,) LongTensor
+    Output: (B, n_channel, d_model) 通道特异性情绪嵌入
+    """
+    def __init__(self, num_classes, n_channel, d_model, n_modes=8):
+        super().__init__()
+        self.n_channel = n_channel
+        self.d_model = d_model
+        self.n_modes = n_modes
+        assert d_model % n_modes == 0
+        self.d_mode = d_model // n_modes
+
+        self.class_emb = nn.Embedding(num_classes, d_model)
+
+        # 每个模式有独立的空间权重模式 (哪些通道被激活)
+        self.spatial_modes = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.SiLU(),
+            nn.Linear(d_model, n_channel * n_modes),
+        )
+        # 每个模式有独立的特征方向 (如何调制)
+        self.feat_modes = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.SiLU(),
+            nn.Linear(d_model, d_model),  # n_modes * d_mode = d_model
+        )
+
+    def forward(self, labels):
+        """labels: (B,) → (B, n_channel, d_model)"""
+        emb = self.class_emb(labels)  # (B, d_model)
+        B = emb.shape[0]
+
+        # n_modes 个空间模式
+        spatial = self.spatial_modes(emb)                          # (B, C*M)
+        spatial = spatial.view(B, self.n_modes, self.n_channel)    # (B, M, C)
+
+        # n_modes 个特征方向
+        feats = self.feat_modes(emb)                               # (B, M*d_mode)
+        feats = feats.view(B, self.n_modes, self.d_mode)           # (B, M, d_mode)
+
+        # 空间权重 × 特征方向 的外积, 多模式拼接 → (B, C, d_model)
+        out = spatial.unsqueeze(-1) * feats.unsqueeze(2)           # (B, M, C, d_mode)
+        out = out.permute(0, 2, 1, 3).reshape(B, self.n_channel, self.d_model)
+        return out
+
+
 class AdaLayerNorm(nn.Module):
-    def __init__(self, n_embd):
+    """
+    Adaptive Layer Norm with channel-specific emotion conditioning.
+
+    timestep → 全局 scale/shift (所有通道相同, 控制去噪步进)
+    label   → 通道特异 scale/shift (不同脑区不同调制, 控制情绪模式)
+
+    两者顺序施加: 先 timestep 调制, 再 label 调制.
+    """
+    def __init__(self, n_embd, electrode_coords=None):
         super().__init__()
         self.emb = SinusoidalPosEmb(n_embd)
         self.silu = nn.SiLU()
-        self.linear = nn.Linear(n_embd, n_embd*2)
+        self.linear = nn.Linear(n_embd, n_embd * 2)      # timestep → global scale/shift
         self.layernorm = nn.LayerNorm(n_embd, elementwise_affine=False)
-        # self.layernorm = nn.LayerNorm(n_embd)
+
+        # Channel-specific label modulation (NEW)
+        self.label_film = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(n_embd, n_embd * 2),                # label → per-channel scale/shift
+        )
 
     def forward(self, x, timestep, label_emb=None):
-        emb = self.emb(timestep)
+        # ---- Timestep: global modulation (same for all channels) ----
+        t_emb = self.linear(self.silu(self.emb(timestep))).unsqueeze(1)  # (B, 1, 2d)
+        t_scale, t_shift = torch.chunk(t_emb, 2, dim=-1)
+        x = self.layernorm(x) * (1 + t_scale) + t_shift
+
+        # ---- Label: channel-specific modulation ----
         if label_emb is not None:
-            emb = emb + label_emb
-        emb = self.linear(self.silu(emb)).unsqueeze(1)
-        scale, shift = torch.chunk(emb, 2, dim=2)
-        x = self.layernorm(x) * (1 + scale) + shift
+            # label_emb: (B, n_channel, d_model) from SpatialEmotionConditioner
+            #         or (B, d_model) for legacy backward compat
+            if label_emb.dim() == 2:
+                label_emb = label_emb.unsqueeze(1)  # → (B, 1, d_model)
+            l_emb = self.label_film(label_emb)      # (B, C, 2d) or (B, 1, 2d)
+            l_scale, l_shift = torch.chunk(l_emb, 2, dim=-1)
+            x = x * (1 + l_scale) + l_shift
+
         return x

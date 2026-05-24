@@ -28,51 +28,79 @@ SEED_62_CHANNELS = [
 
 def _get_seed_62_coords():
     """
-    Return (62, 3) tensor: 2D projected coordinates + z from unit sphere.
-    x: left(-) / right(+),  y: anterior(+) / posterior(-)
+    SEED 62-channel 3D electrode coordinates (meters).
+    Source: MNE-Python standard_1020 montage (mne.channels.make_standard_montage).
+    CB1/CB2 (cerebellar): interpolated from O1/O2 + PO7/PO8.
+    Coordinate system: x(left-/right+), y(posterior-/anterior+), z(inferior-/superior+).
+    Returns: (62, 3) tensor
     """
-    coords_2d = {
-        # Frontal-polar
-        'FP1': (-0.15, 0.92), 'FPZ': (0.00, 0.95), 'FP2': (0.15, 0.92),
-        'AF3': (-0.25, 0.82), 'AF4': (0.25, 0.82),
-        # Frontal
-        'F7': (-0.70, 0.60), 'F5': (-0.52, 0.60), 'F3': (-0.35, 0.60),
-        'F1': (-0.15, 0.60), 'FZ': (0.00, 0.60), 'F2': (0.15, 0.60),
-        'F4': (0.35, 0.60), 'F6': (0.52, 0.60), 'F8': (0.70, 0.60),
-        # Frontal-central
-        'FT7': (-0.80, 0.35), 'FC5': (-0.55, 0.35), 'FC3': (-0.35, 0.35),
-        'FC1': (-0.15, 0.35), 'FCZ': (0.00, 0.35), 'FC2': (0.15, 0.35),
-        'FC4': (0.35, 0.35), 'FC6': (0.55, 0.35), 'FT8': (0.80, 0.35),
-        # Central
-        'T7': (-0.90, 0.00), 'C5': (-0.58, 0.00), 'C3': (-0.35, 0.00),
-        'C1': (-0.15, 0.00), 'CZ': (0.00, 0.00), 'C2': (0.15, 0.00),
-        'C4': (0.35, 0.00), 'C6': (0.58, 0.00), 'T8': (0.90, 0.00),
-        # Central-parietal
-        'TP7': (-0.80, -0.35), 'CP5': (-0.55, -0.35), 'CP3': (-0.35, -0.35),
-        'CP1': (-0.15, -0.35), 'CPZ': (0.00, -0.35), 'CP2': (0.15, -0.35),
-        'CP4': (0.35, -0.35), 'CP6': (0.55, -0.35), 'TP8': (0.80, -0.35),
-        # Parietal
-        'P7': (-0.70, -0.60), 'P5': (-0.52, -0.60), 'P3': (-0.35, -0.60),
-        'P1': (-0.15, -0.60), 'PZ': (0.00, -0.60), 'P2': (0.15, -0.60),
-        'P4': (0.35, -0.60), 'P6': (0.52, -0.60), 'P8': (0.70, -0.60),
-        # Parietal-occipital
-        'PO7': (-0.55, -0.78), 'PO5': (-0.38, -0.78), 'PO3': (-0.22, -0.78),
-        'POZ': (0.00, -0.78), 'PO4': (0.22, -0.78), 'PO6': (0.38, -0.78),
-        'PO8': (0.55, -0.78),
-        # Occipital
-        'CB1': (-0.35, -0.92), 'O1': (-0.15, -0.92), 'OZ': (0.00, -0.95),
-        'O2': (0.15, -0.92), 'CB2': (0.35, -0.92),
-    }
-    xy = []
-    for ch in SEED_62_CHANNELS:
-        xy.append(coords_2d[ch])
-    xy = torch.tensor(xy, dtype=torch.float32)  # (62, 2)
-
-    # Add z from unit sphere: z = sqrt(1 - x^2 - y^2), clamped
-    r2 = (xy ** 2).sum(dim=1, keepdim=True).clamp(max=0.99)
-    z = torch.sqrt(1.0 - r2)
-    coords_3d = torch.cat([xy, z], dim=1)  # (62, 3)
-    return coords_3d
+    # fmt: off
+    coords = torch.tensor([
+        [-0.029437,  0.083917, -0.006990],  # FP1
+        [ 0.000112,  0.088247, -0.001713],  # FPZ
+        [ 0.029872,  0.084896, -0.007080],  # FP2
+        [-0.033701,  0.076837,  0.021227],  # AF3
+        [ 0.035712,  0.077726,  0.021956],  # AF4
+        [-0.070263,  0.042474, -0.011420],  # F7
+        [-0.064466,  0.048035,  0.016921],  # F5
+        [-0.050244,  0.053111,  0.042192],  # F3
+        [-0.027496,  0.056931,  0.060342],  # F1
+        [ 0.000312,  0.058512,  0.066462],  # FZ
+        [ 0.029514,  0.057602,  0.059540],  # F2
+        [ 0.051836,  0.054305,  0.040814],  # F4
+        [ 0.067914,  0.049830,  0.016367],  # F6
+        [ 0.073043,  0.044422, -0.012000],  # F8
+        [-0.080775,  0.014120, -0.011135],  # FT7
+        [-0.077215,  0.018643,  0.024460],  # FC5
+        [-0.060182,  0.022716,  0.055544],  # FC3
+        [-0.034062,  0.026011,  0.079987],  # FC1
+        [ 0.000376,  0.027390,  0.088668],  # FCZ
+        [ 0.034784,  0.026438,  0.078808],  # FC2
+        [ 0.062293,  0.023723,  0.055630],  # FC4
+        [ 0.079534,  0.019936,  0.024438],  # FC6
+        [ 0.081815,  0.015417, -0.011330],  # FT8
+        [-0.084161, -0.016019, -0.009346],  # T7
+        [-0.080280, -0.013760,  0.029160],  # C5
+        [-0.065358, -0.011632,  0.064358],  # C3
+        [-0.036158, -0.009984,  0.089752],  # C1
+        [ 0.000401, -0.009167,  0.100244],  # CZ
+        [ 0.037672, -0.009624,  0.088412],  # C2
+        [ 0.067118, -0.010900,  0.063580],  # C4
+        [ 0.083456, -0.012776,  0.029208],  # C6
+        [ 0.085080, -0.015020, -0.009490],  # T8
+        [-0.084830, -0.046022, -0.007056],  # TP7
+        [-0.079592, -0.046551,  0.030949],  # CP5
+        [-0.063556, -0.047009,  0.065624],  # CP3
+        [-0.035513, -0.047292,  0.091315],  # CP1
+        [ 0.000386, -0.047318,  0.099432],  # CPZ
+        [ 0.038384, -0.047073,  0.090695],  # CP2
+        [ 0.066612, -0.046637,  0.065580],  # CP4
+        [ 0.083322, -0.046101,  0.031206],  # CP6
+        [ 0.085549, -0.045545, -0.007130],  # TP8
+        [-0.072434, -0.073453, -0.002487],  # P7
+        [-0.067272, -0.076291,  0.028382],  # P5
+        [-0.053007, -0.078788,  0.055940],  # P3
+        [-0.028620, -0.080525,  0.075436],  # P1
+        [ 0.000325, -0.081115,  0.082615],  # PZ
+        [ 0.031920, -0.080487,  0.076716],  # P2
+        [ 0.055667, -0.078560,  0.056561],  # P4
+        [ 0.067888, -0.075904,  0.028091],  # P6
+        [ 0.073056, -0.073068, -0.002540],  # P8
+        [-0.054840, -0.097528,  0.002792],  # PO7
+        [-0.048424, -0.099341,  0.021599],  # PO5
+        [-0.036511, -0.100853,  0.037167],  # PO3
+        [ 0.000216, -0.102178,  0.050608],  # POZ
+        [ 0.036782, -0.100849,  0.036397],  # PO4
+        [ 0.049820, -0.099446,  0.021727],  # PO6
+        [ 0.055667, -0.097625,  0.002730],  # PO8
+        [-0.042127, -0.120449,  0.000815],  # CB1 (interpolated: midpoint O1+PO7)
+        [-0.029413, -0.112449,  0.008839],  # O1
+        [ 0.000108, -0.114892,  0.014657],  # OZ
+        [ 0.029843, -0.112156,  0.008800],  # O2
+        [ 0.042755, -0.120156,  0.000765],  # CB2 (interpolated: midpoint O2+PO8)
+    ], dtype=torch.float32)
+    # fmt: on
+    return coords  # (62, 3)
 
 
 # ============================================================
@@ -488,11 +516,12 @@ class EncoderBlock(nn.Module):
                  resid_pdrop=0.1,
                  mlp_hidden_times=4,
                  activate='GELU',
-                 max_len=None
+                 max_len=None,
+                 electrode_coords=None,   # ← NEW
                  ):
         super().__init__()
 
-        self.ln1 = AdaLayerNorm(n_embd)
+        self.ln1 = AdaLayerNorm(n_embd, electrode_coords=electrode_coords)
         self.ln2 = nn.LayerNorm(n_embd)
         self.attn = FullAttention(
                 n_embd=n_embd,
@@ -531,7 +560,8 @@ class Encoder(nn.Module):
         resid_pdrop=0.,
         mlp_hidden_times=4,
         block_activate='GELU',
-        max_len=None
+        max_len=None,
+        electrode_coords=None,     # ← NEW
     ):
         super().__init__()
 
@@ -543,7 +573,8 @@ class Encoder(nn.Module):
                 resid_pdrop=resid_pdrop,
                 mlp_hidden_times=mlp_hidden_times,
                 activate=block_activate,
-                max_len=max_len
+                max_len=max_len,
+                electrode_coords=electrode_coords,  # ← NEW
         ) for _ in range(n_layer)])
 
     def forward(self, input, t, padding_masks=None, label_emb=None):
@@ -564,11 +595,12 @@ class DecoderBlock(nn.Module):
                  mlp_hidden_times=4,
                  activate='GELU',
                  condition_dim=1024,
-                 max_len=None
+                 max_len=None,
+                 electrode_coords=None,   # ← NEW
                  ):
         super().__init__()
         
-        self.ln1 = AdaLayerNorm(n_embd)
+        self.ln1 = AdaLayerNorm(n_embd, electrode_coords=electrode_coords)
         self.ln2 = nn.LayerNorm(n_embd)
 
         self.attn1 = FullAttention(
@@ -589,7 +621,7 @@ class DecoderBlock(nn.Module):
                 max_len=max_len
                 )
         
-        self.ln1_1 = AdaLayerNorm(n_embd)
+        self.ln1_1 = AdaLayerNorm(n_embd, electrode_coords=electrode_coords)
 
         assert activate in ['GELU', 'GELU2']
         act = nn.GELU() if activate == 'GELU' else GELU2()
@@ -609,7 +641,8 @@ class DecoderBlock(nn.Module):
         a, att = self.attn1(self.ln1(x, timestep, label_emb), mask=mask)
         x = x + a
 
-        a, att = self.attn2(self.ln1_1(x, timestep), encoder_output, mask=mask)
+        # Cross-attention 也接收情绪条件 (原来没传 label_emb)
+        a, att = self.attn2(self.ln1_1(x, timestep, label_emb), encoder_output, mask=mask)
         x = x + a
 
         band_out = self.band_block(x)
@@ -633,7 +666,8 @@ class Decoder(nn.Module):
         mlp_hidden_times=4,
         block_activate='GELU',
         condition_dim=512,
-        max_len=None
+        max_len=None,
+        electrode_coords=None,     # ← NEW
     ):
       super().__init__()
       self.d_model = n_embd
@@ -648,7 +682,8 @@ class Decoder(nn.Module):
                 mlp_hidden_times=mlp_hidden_times,
                 activate=block_activate,
                 condition_dim=condition_dim,
-                max_len=max_len
+                max_len=max_len,
+                electrode_coords=electrode_coords,  # ← NEW
         ) for _ in range(n_layer)])
       
     def forward(self, x, t, enc, padding_masks=None, label_emb=None):
@@ -705,13 +740,17 @@ class Transformer(nn.Module):
         # ---- Spatial positional encoding (NEW) ----
         self.spatial_pe = SpatialPositionalEncoding(n_channel, n_embd)
 
-        # ---- Pass n_channel to encoder (NEW) ----
+        # ---- Electrode coordinates for channel-aware conditioning ----
+        electrode_coords = _get_seed_62_coords()  # (62, 3)
+
+        # ---- Pass n_channel + electrode_coords to encoder (NEW) ----
         self.encoder = Encoder(
             n_layer_enc, n_embd, n_heads,
-            n_channel=n_channel,       # ← NEW
+            n_channel=n_channel,
             attn_pdrop=attn_pdrop, resid_pdrop=resid_pdrop,
             mlp_hidden_times=mlp_hidden_times,
-            block_activate=block_activate, max_len=self.max_len
+            block_activate=block_activate, max_len=self.max_len,
+            electrode_coords=electrode_coords,
         )
 
         self.decoder = Decoder(
@@ -719,7 +758,8 @@ class Transformer(nn.Module):
             attn_pdrop=attn_pdrop, resid_pdrop=resid_pdrop,
             mlp_hidden_times=mlp_hidden_times,
             block_activate=block_activate, condition_dim=n_embd,
-            max_len=self.max_len
+            max_len=self.max_len,
+            electrode_coords=electrode_coords,
         )
 
     def forward(self, input, t, padding_masks=None, return_res=False, label_emb=None):

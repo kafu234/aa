@@ -82,6 +82,8 @@ class SEEDTrainer:
         # 从 config 读取超参数
         solver_cfg = config.get("solver", {})
         self.max_epochs = solver_cfg.get("max_epochs", 5000)
+        if hasattr(args, 'max_epochs') and args.max_epochs is not None:
+            self.max_epochs = args.max_epochs
         self.grad_accum = solver_cfg.get("gradient_accumulate_every", 2)
         self.save_cycle = solver_cfg.get("save_cycle", 500)
 
@@ -240,6 +242,10 @@ def main():
     parser = argparse.ArgumentParser(description="Train FM-TS on SEED dataset")
     parser.add_argument("--config", type=str, required=True, help="Config YAML path")
     parser.add_argument("--gpu", type=int, default=0, help="GPU id")
+    parser.add_argument("--max_epochs", type=int, default=None,
+                        help="覆盖 config 里的 max_epochs (微调时用, 如 500)")
+    parser.add_argument("--finetune", action="store_true",
+                        help="微调模式: 加载 checkpoint 权重但重置训练步数")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--conditional", action="store_true", help="Enable conditional generation")
     parser.add_argument("--sample_only", action="store_true", help="Only generate samples")
@@ -249,6 +255,27 @@ def main():
     parser.add_argument("--target_label", type=int, default=None, choices=[0, 1, 2],
                         help="Generate only this emotion class: 0=negative, 1=neutral, 2=positive. "
                              "Default: generate all three classes equally.")
+    # Classifier Guidance
+    parser.add_argument("--classifier_weight", type=float, default=0.02,
+                        help="分类器引导损失权重 (0=不用, 默认 0.02)")
+    parser.add_argument("--cls_epochs", type=int, default=50,
+                        help="引导分类器预训练轮数")
+    # Classifier-Free Guidance + 频谱损失
+    parser.add_argument("--cfg_dropout", type=float, default=0.15,
+                        help="CFG 训练时随机丢弃标签概率 (默认 0.15)")
+    parser.add_argument("--guidance_scale", type=float, default=2.0,
+                        help="CFG 推理时引导强度 (默认 2.0)")
+    parser.add_argument("--spectral_weight", type=float, default=0.1,
+                        help="频谱一致性损失权重 (默认 0.1)")
+    parser.add_argument("--split_mode", type=str, default="session",
+                        choices=["random", "session", "trial"],
+                        help="session=前2session训/第3session测, trial=每session前9trial训/后6trial测")
+    parser.add_argument("--subject", type=int, default=None,
+                        help="指定被试编号 (1-15), 不指定则使用所有被试")
+    parser.add_argument("--train_trials", type=str, default=None,
+                        help="训练用 trial 编号, 如 '0,1,2,3,4,5,6,7,8'")
+    parser.add_argument("--test_trials", type=str, default=None,
+                        help="测试用 trial 编号, 如 '9,10,11,12,13,14'")
     args = parser.parse_args()
 
     # 随机种子
@@ -284,6 +311,14 @@ def main():
         ds_cfg["conditional"] = True
 
     ds_cfg["period"] = "train"  # 确保是训练集
+    ds_cfg["split_mode"] = args.split_mode
+    if args.subject is not None:
+        ds_cfg["subjects"] = [args.subject]
+        print(f"[被试 {args.subject}] 只使用该被试的数据")
+    if args.train_trials is not None:
+        ds_cfg["train_trials"] = [int(x) for x in args.train_trials.split(",")]
+    if args.test_trials is not None:
+        ds_cfg["test_trials"] = [int(x) for x in args.test_trials.split(",")]
     train_dataset = SEEDDataset(**ds_cfg)
     print_dataset_stats(train_dataset)
 
@@ -302,7 +337,13 @@ def main():
     # 条件生成: 设置 num_classes
     if args.conditional:
         model_cfg["num_classes"] = 3  # SEED: negative/neutral/positive
-        print(f"\n[Conditional mode] num_classes=3")
+        model_cfg["classifier_weight"] = args.classifier_weight
+        model_cfg["cfg_dropout"] = args.cfg_dropout
+        model_cfg["spectral_weight"] = args.spectral_weight
+        model_cfg["guidance_scale"] = args.guidance_scale
+        print(f"\n[Conditional mode] num_classes=3, classifier_weight={args.classifier_weight}, "
+              f"cfg_dropout={args.cfg_dropout}, spectral_weight={args.spectral_weight}, "
+              f"guidance_scale={args.guidance_scale}")
     else:
         model_cfg["num_classes"] = 0
     print(f"Model config: seq_length={model_cfg['seq_length']}, feature_size={model_cfg['feature_size']}")
@@ -313,6 +354,24 @@ def main():
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {num_params:,} ({num_params/1e6:.2f}M)\n")
 
+    # ---- Classifier Guidance: 预训练/加载引导分类器 ----
+    if args.conditional and args.classifier_weight > 0:
+        if args.results_dir is None:
+            args.results_dir = f"./results/{ds_cfg.get('name', 'SEED')}"
+        os.makedirs(args.results_dir, exist_ok=True)
+        classifier_path = os.path.join(args.results_dir, "guidance_classifier.pt")
+
+        if os.path.exists(classifier_path):
+            model.load_classifier(classifier_path, device=device)
+        else:
+            real_data = train_dataset.samples   # (N, 62, 200)
+            real_labels = train_dataset.labels  # (N,)
+            model.pretrain_classifier(
+                real_data, real_labels,
+                epochs=args.cls_epochs, device=device,
+            )
+            model.save_classifier(classifier_path)
+
     # ---- 训练器 ----
     if args.results_dir is None:
         args.results_dir = f"./results/{ds_cfg.get('name', 'SEED')}"
@@ -322,6 +381,10 @@ def main():
     # 加载 checkpoint
     if args.checkpoint is not None:
         trainer.load(args.checkpoint)
+        if args.finetune:
+            trainer.step = 0
+            trainer.best_loss = float("inf")
+            print(f"[Finetune] 重置训练步数: step=0, max_epochs={trainer.max_epochs}")
 
     # ---- 训练或生成 ----
     if not args.sample_only:
