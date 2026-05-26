@@ -239,18 +239,22 @@ class DEClassifier(nn.Module):
 # ============================================================
 
 def load_data_by_session(data_root, window=200, seed=42, split_mode="session",
-                         subject=None, train_trials=None, test_trials=None):
+                         subject=None, train_trials=None, test_trials=None,
+                         test_subject=None):
     """
     返回 (train_data, train_labels, test_data, test_labels).
 
     split_mode="session": session 1+2 训练, session 3 测试 (SEED 标准协议).
     split_mode="trial":   每个 session 前 9 个 trial 训练, 后 6 个 trial 测试.
+    split_mode="subject": 14 个被试训练, 1 个被试测试 (LOSO).
     split_mode="random":  随机 60/40 划分.
-    subject: None=所有被试, int=指定被试编号 (1-15).
+    subject: None=所有被试, int=指定被试编号 (仅 session/trial 模式).
+    test_subject: int=测试被试编号 (仅 subject 模式).
     """
     from Utils.Data_utils.seed_dataset import SEEDDataset
 
-    subjects = [subject] if subject is not None else None
+    # subject 模式不能同时指定 subject 过滤
+    subjects = [subject] if (subject is not None and split_mode != "subject") else None
 
     common = dict(
         name="SEED_RAW", data_root=data_root, data_type="raw",
@@ -265,6 +269,8 @@ def load_data_by_session(data_root, window=200, seed=42, split_mode="session",
         common["train_trials"] = train_trials
     if test_trials is not None:
         common["test_trials"] = test_trials
+    if test_subject is not None:
+        common["test_subject"] = test_subject
 
     ds_train = SEEDDataset(**common, period="train")
     ds_test  = SEEDDataset(**common, period="test")
@@ -533,10 +539,12 @@ def main():
     parser.add_argument("--no_synthetic", action="store_true")
     parser.add_argument("--compare", action="store_true")
     parser.add_argument("--split_mode", type=str, default="session",
-                        choices=["random", "session", "trial"],
-                        help="session=前2session训/第3session测, trial=每session前9trial训/后6trial测, random=随机")
+                        choices=["random", "session", "trial", "subject"],
+                        help="session=跨session, trial=跨trial, subject=跨被试(LOSO), random=随机")
     parser.add_argument("--subject", type=int, default=None,
                         help="指定被试编号 (1-15), 不指定则使用所有被试")
+    parser.add_argument("--test_subject", type=int, default=None,
+                        help="跨被试模式: 测试被试编号 (如 15), 其余为训练")
     parser.add_argument("--train_trials", type=str, default=None,
                         help="训练用的 trial 编号, 如 '0,1,2,3,4,5,6,7,8' (默认前9个)")
     parser.add_argument("--test_trials", type=str, default=None,
@@ -573,7 +581,7 @@ def main():
     test_trials = [int(x) for x in args.test_trials.split(",")] if args.test_trials else None
     train_orig, train_orig_labels, test_data, test_labels = load_data_by_session(
         args.data_root, args.window, args.seed, args.split_mode, args.subject,
-        train_trials, test_trials,
+        train_trials, test_trials, args.test_subject,
     )
 
     # ---- 加载生成数据 ----

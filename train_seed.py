@@ -65,8 +65,8 @@ class SimpleEMA:
     def state_dict(self):
         return self.shadow.state_dict()
 
-    def load_state_dict(self, state_dict):
-        self.shadow.load_state_dict(state_dict)
+    def load_state_dict(self, state_dict, strict=True):
+        self.shadow.load_state_dict(state_dict, strict=strict)
 
 
 # ============================================================
@@ -187,12 +187,19 @@ class SEEDTrainer:
 
     def load(self, path):
         data = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(data["model"])
-        self.ema.load_state_dict(data["ema"])
-        self.optimizer.load_state_dict(data["optimizer"])
+        missing, unexpected = self.model.load_state_dict(data["model"], strict=False)
+        self.ema.load_state_dict(data["ema"], strict=False)
+        try:
+            self.optimizer.load_state_dict(data["optimizer"])
+        except Exception:
+            print(f"  Warning: optimizer state mismatch, using fresh optimizer")
         self.step = data["step"]
         self.best_loss = data.get("best_loss", float("inf"))
         print(f"Loaded checkpoint from {path}, step={self.step}")
+        if unexpected:
+            print(f"  Ignored {len(unexpected)} unexpected keys (e.g. guidance_classifier)")
+        if missing:
+            print(f"  Missing {len(missing)} keys (new modules will be randomly initialized)")
 
     @torch.no_grad()
     def generate(self, num_samples, batch_size=64, labels=None):
@@ -268,10 +275,12 @@ def main():
     parser.add_argument("--spectral_weight", type=float, default=0.1,
                         help="频谱一致性损失权重 (默认 0.1)")
     parser.add_argument("--split_mode", type=str, default="session",
-                        choices=["random", "session", "trial"],
-                        help="session=前2session训/第3session测, trial=每session前9trial训/后6trial测")
+                        choices=["random", "session", "trial", "subject"],
+                        help="session=跨session, trial=跨trial, subject=跨被试(LOSO)")
     parser.add_argument("--subject", type=int, default=None,
                         help="指定被试编号 (1-15), 不指定则使用所有被试")
+    parser.add_argument("--test_subject", type=int, default=None,
+                        help="跨被试模式: 测试被试编号 (如 15), 其余为训练")
     parser.add_argument("--train_trials", type=str, default=None,
                         help="训练用 trial 编号, 如 '0,1,2,3,4,5,6,7,8'")
     parser.add_argument("--test_trials", type=str, default=None,
@@ -312,9 +321,12 @@ def main():
 
     ds_cfg["period"] = "train"  # 确保是训练集
     ds_cfg["split_mode"] = args.split_mode
-    if args.subject is not None:
+    if args.subject is not None and args.split_mode != "subject":
         ds_cfg["subjects"] = [args.subject]
         print(f"[被试 {args.subject}] 只使用该被试的数据")
+    if args.test_subject is not None:
+        ds_cfg["test_subject"] = args.test_subject
+        print(f"[LOSO] 测试被试: {args.test_subject}, 其余为训练")
     if args.train_trials is not None:
         ds_cfg["train_trials"] = [int(x) for x in args.train_trials.split(",")]
     if args.test_trials is not None:

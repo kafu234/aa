@@ -57,11 +57,12 @@ class SEEDDataset(Dataset):
         output_dir="./OUTPUT",
         conditional=True,
         target_label=None,
-        split_mode="random",        # ← "random", "session", 或 "trial"
+        split_mode="random",        # ← "random", "session", "trial", 或 "subject"
         train_sessions=(0, 1),      # ← session 划分用
         test_sessions=(2,),         # ← session 划分用
         train_trials=None,          # ← trial 划分用, 如 list(range(9))
         test_trials=None,           # ← trial 划分用, 如 list(range(9,15))
+        test_subject=None,          # ← subject 划分用, 如 15 (LOSO)
         # 预处理参数
         sfreq=200,              # 采样率 (Hz)
         bandpass_low=0.5,       # 带通下限 (Hz)，None=不做
@@ -84,6 +85,7 @@ class SEEDDataset(Dataset):
         self.test_sessions = test_sessions
         self.train_trials = train_trials if train_trials is not None else list(range(9))
         self.test_trials = test_trials if test_trials is not None else list(range(9, 15))
+        self.test_subject = test_subject
 
         # 保存预处理参数
         self.preprocess_cfg = {
@@ -99,7 +101,7 @@ class SEEDDataset(Dataset):
         seed_labels = self._load_labels(data_root)
 
         # ---- 2. 按文件加载 + 每个文件单独归一化 + 滑动窗口 ----
-        all_samples, all_labels, all_sessions, all_trials = self._load_and_process(
+        all_samples, all_labels, all_sessions, all_trials, all_subjects = self._load_and_process(
             data_root, seed_labels, raw_key_suffix,
             subjects, sessions, window
         )
@@ -111,6 +113,7 @@ class SEEDDataset(Dataset):
             all_labels = all_labels[mask]
             all_sessions = all_sessions[mask]
             all_trials = all_trials[mask]
+            all_subjects = all_subjects[mask]
 
         # ---- 4. 训练/测试划分 ----
         if split_mode == "session":
@@ -122,6 +125,11 @@ class SEEDDataset(Dataset):
             train_data, train_labels, test_data, test_labels = self._split_by_trial(
                 all_samples, all_labels, all_trials,
                 self.train_trials, self.test_trials,
+            )
+        elif split_mode == "subject":
+            train_data, train_labels, test_data, test_labels = self._split_by_subject(
+                all_samples, all_labels, all_subjects,
+                self.test_subject,
             )
         else:
             train_data, train_labels, test_data, test_labels = self._split(
@@ -184,6 +192,7 @@ class SEEDDataset(Dataset):
         all_labels = []
         all_sessions = []
         all_trials = []
+        all_subjects = []
         first_file = True
 
         for subj_idx, subj_sessions in file_groups.items():
@@ -244,16 +253,18 @@ class SEEDDataset(Dataset):
                         all_labels.append(label)
                         all_sessions.append(sess_idx)
                         all_trials.append(trial_idx)
+                        all_subjects.append(subj_idx)
 
         samples = np.stack(all_samples, axis=0).astype(np.float32)  # (N, 62, window)
         labels = np.array(all_labels, dtype=np.int64)
         sessions_arr = np.array(all_sessions, dtype=np.int64)
         trials_arr = np.array(all_trials, dtype=np.int64)
+        subjects_arr = np.array(all_subjects, dtype=np.int64)
         print(f"[SEEDDataset] Total samples: {samples.shape[0]}, shape per sample: ({samples.shape[1]}, {samples.shape[2]})")
-        if len(np.unique(sessions_arr)) > 1:
-            for s in sorted(np.unique(sessions_arr)):
-                print(f"  session {s}: {(sessions_arr == s).sum()} samples")
-        return samples, labels, sessions_arr, trials_arr
+        if len(np.unique(subjects_arr)) > 1:
+            print(f"  {len(np.unique(subjects_arr))} subjects, "
+                  f"{len(np.unique(sessions_arr))} session types")
+        return samples, labels, sessions_arr, trials_arr, subjects_arr
 
     # ================================================================
     #  EEG 预处理 (每个 trial 单独调用，避免边界伪迹)
@@ -430,6 +441,26 @@ class SEEDDataset(Dataset):
 
         print(f"[Trial Split] train trials={list(train_trials)}: {train_mask.sum()} samples, "
               f"test trials={list(test_trials)}: {test_mask.sum()} samples")
+        print(f"  Train labels: {dict(zip(*np.unique(train_labels, return_counts=True)))}")
+        print(f"  Test  labels: {dict(zip(*np.unique(test_labels, return_counts=True)))}")
+        return train_data, train_labels, test_data, test_labels
+
+    def _split_by_subject(self, data, labels, subjects, test_subject):
+        """
+        跨被试划分 (LOSO): 指定被试作为测试集, 其余被试作为训练集.
+        test_subject: int, 测试被试编号 (如 15).
+        """
+        test_mask = (subjects == test_subject)
+        train_mask = ~test_mask
+
+        train_data = data[train_mask]
+        train_labels = labels[train_mask]
+        test_data = data[test_mask]
+        test_labels = labels[test_mask]
+
+        train_subjs = sorted(np.unique(subjects[train_mask]).tolist())
+        print(f"[Subject Split] train: {len(train_subjs)} subjects ({train_mask.sum()} samples), "
+              f"test: subject {test_subject} ({test_mask.sum()} samples)")
         print(f"  Train labels: {dict(zip(*np.unique(train_labels, return_counts=True)))}")
         print(f"  Test  labels: {dict(zip(*np.unique(test_labels, return_counts=True)))}")
         return train_data, train_labels, test_data, test_labels
