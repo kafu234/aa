@@ -331,6 +331,11 @@ def main():
         ds_cfg["train_trials"] = [int(x) for x in args.train_trials.split(",")]
     if args.test_trials is not None:
         ds_cfg["test_trials"] = [int(x) for x in args.test_trials.split(",")]
+    # 分类别训练: 只保留指定类别的数据
+    if args.target_label is not None:
+        ds_cfg["target_label"] = args.target_label
+        label_name = {0: "negative", 1: "neutral", 2: "positive"}[args.target_label]
+        print(f"[分类别训练] 只使用 '{label_name}' (label={args.target_label}) 的数据")
     train_dataset = SEEDDataset(**ds_cfg)
     print_dataset_stats(train_dataset)
 

@@ -252,6 +252,25 @@ class EEGBandBlock(nn.Module):
         return out
 
 
+class DEBandBlock(nn.Module):
+    """
+    EEGBandBlock 的 DE 模式替代品.
+    当 n_feat=5 (DE 特征) 时, 5 个特征本身就是频带, 不需要 FFT 分解.
+    """
+    def __init__(self, n_channel, n_embd, n_feat=5):
+        super().__init__()
+        self.to_feat = nn.Linear(n_embd, n_feat)
+        self.mlp = nn.Sequential(
+            nn.Linear(n_feat, n_feat * 4),
+            nn.GELU(),
+            nn.Linear(n_feat * 4, n_feat),
+        )
+
+    def forward(self, x):
+        x_feat = self.to_feat(x)  # (B, 62, n_feat)
+        return self.mlp(x_feat)   # (B, 62, n_feat)
+
+
 class MovingBlock(nn.Module):
     def __init__(self, out_dim):
         super(MovingBlock, self).__init__()
@@ -626,7 +645,8 @@ class DecoderBlock(nn.Module):
         assert activate in ['GELU', 'GELU2']
         act = nn.GELU() if activate == 'GELU' else GELU2()
 
-        self.band_block = EEGBandBlock(n_channel, n_embd, n_feat, sfreq=200)
+        self.band_block = DEBandBlock(n_channel, n_embd, n_feat) if n_feat <= 10 \
+            else EEGBandBlock(n_channel, n_embd, n_feat, sfreq=200)
 
         self.mlp = nn.Sequential(
             nn.Linear(n_embd, mlp_hidden_times * n_embd),

@@ -100,11 +100,16 @@ class SEEDDataset(Dataset):
         # ---- 1. 加载标签 ----
         seed_labels = self._load_labels(data_root)
 
-        # ---- 2. 按文件加载 + 每个文件单独归一化 + 滑动窗口 ----
-        all_samples, all_labels, all_sessions, all_trials, all_subjects = self._load_and_process(
-            data_root, seed_labels, raw_key_suffix,
-            subjects, sessions, window
-        )
+        # ---- 2. 按文件加载 ----
+        if data_type == "de":
+            all_samples, all_labels, all_sessions, all_trials, all_subjects = self._load_de_data(
+                data_root, seed_labels, de_key_prefix, subjects, sessions
+            )
+            self.var_num = all_samples.shape[-1]  # 5
+        else:
+            all_samples, all_labels, all_sessions, all_trials, all_subjects = self._load_and_process(
+                data_root, seed_labels, raw_key_suffix, subjects, sessions, window
+            )
 
         # ---- 3. 按标签过滤 ----
         if target_label is not None:
@@ -328,6 +333,115 @@ class SEEDDataset(Dataset):
         normed = (data - mean) / std
         normed = np.clip(normed, -clip_std, clip_std)
         normed = normed / clip_std  # 映射到 [-1, 1]
+        return normed.astype(np.float32)
+
+    # ================================================================
+    #  DE 特征加载 (从 SEED ExtractedFeatures 目录)
+    # ================================================================
+    def _load_de_data(self, data_root, seed_labels, de_key_prefix, subjects, sessions):
+        """
+        加载 SEED 官方 DE 特征 (含 LDS 平滑).
+
+        ExtractedFeatures/*.mat 中:
+          de_LDS1 ~ de_LDS15: 每个 trial 的 DE 特征, shape = (62, T, 5)
+          62 通道, T 个时间窗, 5 个频带 (delta, theta, alpha, beta, gamma)
+
+        每个时间窗 (62, 5) 作为一个样本.
+        归一化: 每个文件单独做 z-score → clip → 映射到 [-1, 1].
+        """
+        import glob
+        from scipy import io as sio
+
+        mat_files = sorted(glob.glob(os.path.join(data_root, "*.mat")))
+        mat_files = [f for f in mat_files if "label" not in os.path.basename(f).lower()]
+        if not mat_files:
+            raise FileNotFoundError(f"No .mat files found in {data_root}")
+
+        file_groups = self._group_files(mat_files)
+
+        all_samples = []
+        all_labels = []
+        all_sessions = []
+        all_trials = []
+        all_subjects = []
+        first_file = True
+
+        for subj_idx, subj_sessions in file_groups.items():
+            if subjects is not None and subj_idx not in subjects:
+                continue
+
+            for sess_idx, fpath in enumerate(subj_sessions):
+                if sessions is not None and sess_idx not in sessions:
+                    continue
+
+                mat_data = sio.loadmat(fpath)
+
+                file_de_list = []
+                file_labels = []
+                file_trial_ids = []
+
+                for trial_idx in range(15):
+                    key = f"{de_key_prefix}{trial_idx + 1}"
+                    if key not in mat_data:
+                        continue
+
+                    de_trial = mat_data[key]  # (62, T, 5)
+                    if de_trial.ndim != 3:
+                        continue
+
+                    n_ch, n_t, n_bands = de_trial.shape
+                    samples_trial = de_trial.transpose(1, 0, 2).astype(np.float32)  # (T, 62, 5)
+                    file_de_list.append(samples_trial)
+
+                    label = seed_labels[trial_idx] if trial_idx < len(seed_labels) else 0
+                    label = LABEL_MAP.get(label, label)  # -1→0, 0→1, 1→2
+                    file_labels.extend([label] * n_t)
+                    file_trial_ids.extend([trial_idx] * n_t)
+
+                if not file_de_list:
+                    continue
+
+                file_data = np.concatenate(file_de_list, axis=0)  # (N_file, 62, 5)
+
+                if first_file:
+                    print(f"[SEEDDataset-DE] First file: {os.path.basename(fpath)}, "
+                          f"{len(file_de_list)} trials, {file_data.shape[0]} samples, "
+                          f"shape per sample: {file_data.shape[1:]}")
+                    first_file = False
+
+                # 归一化: per-file, per-channel, per-band
+                file_data = self._normalize_de_file(file_data)
+
+                all_samples.append(file_data)
+                all_labels.extend(file_labels)
+                all_sessions.extend([sess_idx] * len(file_labels))
+                all_trials.extend(file_trial_ids)
+                all_subjects.extend([subj_idx] * len(file_labels))
+
+        all_samples = np.concatenate(all_samples, axis=0)
+        all_labels = np.array(all_labels, dtype=np.int64)
+        all_sessions = np.array(all_sessions, dtype=np.int64)
+        all_trials = np.array(all_trials, dtype=np.int64)
+        all_subjects = np.array(all_subjects, dtype=np.int64)
+
+        print(f"[SEEDDataset-DE] Total: {all_samples.shape[0]} samples, "
+              f"shape: {all_samples.shape}, classes: {sorted(np.unique(all_labels).tolist())}")
+
+        return all_samples, all_labels, all_sessions, all_trials, all_subjects
+
+    @staticmethod
+    def _normalize_de_file(data, clip_std=5.0):
+        """
+        DE 特征归一化: per-channel per-band z-score → clip → [-1, 1].
+        Input:  (N, 62, 5)
+        Output: (N, 62, 5)
+        """
+        mean = data.mean(axis=0, keepdims=True)   # (1, 62, 5)
+        std = data.std(axis=0, keepdims=True)     # (1, 62, 5)
+        std[std < 1e-8] = 1.0
+        normed = (data - mean) / std
+        normed = np.clip(normed, -clip_std, clip_std)
+        normed = normed / clip_std
         return normed.astype(np.float32)
 
     # ================================================================

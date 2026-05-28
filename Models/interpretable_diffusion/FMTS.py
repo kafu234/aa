@@ -32,18 +32,21 @@ class GuidanceClassifier(nn.Module):
     def __init__(self, n_channels=62, n_timepoints=200, sfreq=200,
                  d_model=64, n_heads=4, n_layers=2, num_classes=3, dropout=0.1):
         super().__init__()
-
-        # Band masks for DE extraction (differentiable)
-        freqs = torch.fft.rfftfreq(n_timepoints, d=1.0 / sfreq)
-        masks = []
-        for low, high in self.BANDS:
-            masks.append(((freqs >= low) & (freqs < high)).float())
-        self.register_buffer('band_masks', torch.stack(masks))
         self.n_timepoints = n_timepoints
+        self.de_mode = (n_timepoints <= 10)  # DE模式: 输入已经是 (B, 62, 5)
 
-        # Classifier
+        if not self.de_mode:
+            # Raw模式: 需要FFT提取DE
+            freqs = torch.fft.rfftfreq(n_timepoints, d=1.0 / sfreq)
+            masks = []
+            for low, high in self.BANDS:
+                masks.append(((freqs >= low) & (freqs < high)).float())
+            self.register_buffer('band_masks', torch.stack(masks))
+
+        # Classifier (输入都是5维, 无论raw还是DE)
+        n_input = n_timepoints if self.de_mode else len(self.BANDS)
         self.embed = nn.Sequential(
-            nn.Linear(len(self.BANDS), d_model),
+            nn.Linear(n_input, d_model),
             nn.GELU(),
             nn.LayerNorm(d_model),
         )
@@ -74,12 +77,15 @@ class GuidanceClassifier(nn.Module):
         return torch.cat(de_bands, dim=-1)
 
     def forward(self, x):
-        """x: (B, 62, 200) → (B, num_classes) logits"""
-        de = self.extract_de(x)    # (B, 62, 5) — differentiable!
-        h = self.embed(de)         # (B, 62, d_model)
-        h = self.encoder(h)        # (B, 62, d_model)
-        h = h.mean(dim=1)          # (B, d_model)
-        return self.head(h)        # (B, num_classes)
+        """x: (B, 62, T) 或 (B, 62, 5) → (B, num_classes) logits"""
+        if self.de_mode:
+            de = x
+        else:
+            de = self.extract_de(x)
+        h = self.embed(de)
+        h = self.encoder(h)
+        h = h.mean(dim=1)
+        return self.head(h)
 
 
 # ============================================================
@@ -114,8 +120,13 @@ class FM_TS(nn.Module):
         self.num_classes = num_classes
         self.classifier_weight = classifier_weight
         self.cfg_dropout = cfg_dropout
-        self.spectral_weight = spectral_weight
         self.guidance_scale = guidance_scale
+
+        # DE 模式 (feature_size<=10): 禁用频谱损失 (5个频带特征做FFT无意义)
+        if feature_size <= 10 and spectral_weight > 0:
+            print(f"[FM_TS] DE mode detected (feature_size={feature_size}), disabling spectral loss")
+            spectral_weight = 0.0
+        self.spectral_weight = spectral_weight
 
         self.model = Transformer(n_feat=feature_size, n_channel=seq_length, n_layer_enc=n_layer_enc, n_layer_dec=n_layer_dec,
                                  n_heads=n_heads, attn_pdrop=attn_pd, resid_pdrop=resid_pd, mlp_hidden_times=mlp_hidden_times,

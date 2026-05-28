@@ -1,12 +1,12 @@
 """
-eval_mlp_classifier.py — DE特征 + 分类器评估生成数据质量
+eval_mlp_classifier.py — EEGNet / DE-Transformer 分类器评估生成数据质量
 =========================================================
 
 设计原则:
-  1. GPU 上提取 5 频带 DE 特征: (B, 62, 200) → (B, 62, 5)
-  2. 轻量 Transformer 分类器 (带空间位置编码)
-  3. 不加任何数据增强技巧 (无 Mixup / Label Smoothing / DASM / Warmup)
-     → 保证对比公平: 性能差异只来自生成数据本身的质量
+  1. 默认使用 EEGNet 直接输入 raw EEG: (B, 62, T) → 3 类
+  2. 保留原 DE-Transformer 作为可选 baseline: --model de_transformer
+  3. 支持只用真实数据评估: --real_only 或 --no_synthetic
+  4. 不加 Mixup / Label Smoothing 等额外增强 → 保证对比公平
 
 数据划分:
   默认 --split_mode session (SEED 标准协议):
@@ -19,10 +19,11 @@ eval_mlp_classifier.py — DE特征 + 分类器评估生成数据质量
         --synthetic_path /root/autodl-tmp/result/generated_SEED_RAW_200.npz \
         --compare
 
-    # 只跑 baseline
+    # 只用真实数据跑 EEGNet baseline
     python eval_mlp_classifier.py \
         --data_root /root/autodl-tmp/Preprocessed_EEG \
-        --no_synthetic
+        --split_mode subject --test_subject 1 \
+        --window 800 --model eegnet --real_only
 """
 
 import os
@@ -234,6 +235,163 @@ class DEClassifier(nn.Module):
         return self.head(h)
 
 
+
+# ============================================================
+#  EEGNet Classifier: 直接输入 raw EEG (B, 62, T)
+# ============================================================
+
+class Conv2dWithMaxNorm(nn.Conv2d):
+    """
+    Conv2d with max-norm constraint, used by EEGNet's spatial/depthwise layer.
+
+    Standard EEGNet constrains the spatial-filter weights rather than clipping
+    the layer output. This implementation keeps groups/bias correctly, unlike
+    some simplified third-party wrappers that accidentally ignore them.
+    """
+    def __init__(self, *args, max_norm=1.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_norm = max_norm
+
+    def forward(self, x):
+        with torch.no_grad():
+            self.weight.renorm_(p=2, dim=0, maxnorm=self.max_norm)
+        return F.conv2d(
+            x, self.weight, self.bias, self.stride, self.padding,
+            self.dilation, self.groups,
+        )
+
+
+class EEGNetClassifier(nn.Module):
+    """
+    EEGNet for SEED raw EEG classification.
+
+    Input:  x shape (B, 62, T)
+    Output: logits shape (B, num_classes)
+
+    depthwise_mode:
+      - "standard": original EEGNet-style depthwise spatial convolution
+      - "libeer":   LibEER-compatible stronger variant; spatial conv uses
+                    groups=1, which mixes temporal filters and usually has
+                    higher capacity. Useful for reproducing LibEER-like results.
+    """
+    def __init__(
+        self,
+        n_channels=62,
+        n_times=800,
+        num_classes=3,
+        F1=8,
+        D=2,
+        dropout=0.5,
+        kernel_length=None,
+        depthwise_mode="standard",
+        max_norm=1.0,
+    ):
+        super().__init__()
+        self.n_channels = n_channels
+        self.n_times = n_times
+        self.F1 = F1
+        self.D = D
+        self.F2 = F1 * D
+        self.depthwise_mode = depthwise_mode
+
+        if kernel_length is None:
+            # Match LibEER: kernel_size=(1, datapoints // 2).
+            # For 4s SEED raw at 200 Hz, n_times=800 => kernel_length=400.
+            kernel_length = max(16, n_times // 2)
+
+        self.conv1 = nn.Conv2d(
+            in_channels=1,
+            out_channels=F1,
+            kernel_size=(1, kernel_length),
+            padding="same",
+            bias=False,
+        )
+        self.bn1 = nn.BatchNorm2d(F1)
+
+        if depthwise_mode == "standard":
+            groups = F1
+        elif depthwise_mode == "libeer":
+            groups = 1
+        else:
+            raise ValueError("depthwise_mode must be 'standard' or 'libeer'")
+
+        self.depth_conv = Conv2dWithMaxNorm(
+            in_channels=F1,
+            out_channels=F1 * D,
+            kernel_size=(n_channels, 1),
+            groups=groups,
+            bias=False,
+            max_norm=max_norm,
+        )
+        self.bn2 = nn.BatchNorm2d(F1 * D)
+        self.act1 = nn.ELU(inplace=True)
+        self.pool1 = nn.AvgPool2d(kernel_size=(1, 4), stride=(1, 4))
+        self.dropout1 = nn.Dropout(dropout)
+
+        self.sep_depth = nn.Conv2d(
+            in_channels=F1 * D,
+            out_channels=F1 * D,
+            kernel_size=(1, 16),
+            padding="same",
+            groups=F1 * D,
+            bias=False,
+        )
+        self.sep_point = nn.Conv2d(
+            in_channels=F1 * D,
+            out_channels=self.F2,
+            kernel_size=(1, 1),
+            bias=False,
+        )
+        self.bn3 = nn.BatchNorm2d(self.F2)
+        self.act2 = nn.ELU(inplace=True)
+        self.pool2 = nn.AvgPool2d(kernel_size=(1, 8), stride=(1, 8))
+        self.dropout2 = nn.Dropout(dropout)
+
+        # More robust than hard-coding self.F2 * (n_times // 32).
+        with torch.no_grad():
+            dummy = torch.zeros(1, 1, n_channels, n_times)
+            flat_dim = self._forward_features(dummy).shape[1]
+        self.fc = nn.Linear(flat_dim, num_classes)
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, nonlinearity="linear")
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+        nn.init.xavier_normal_(self.fc.weight)
+        nn.init.zeros_(self.fc.bias)
+
+    def _forward_features(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.depth_conv(x)
+        x = self.bn2(x)
+        x = self.act1(x)
+        x = self.pool1(x)
+        x = self.dropout1(x)
+        x = self.sep_depth(x)
+        x = self.sep_point(x)
+        x = self.bn3(x)
+        x = self.act2(x)
+        x = self.pool2(x)
+        x = self.dropout2(x)
+        return torch.flatten(x, 1)
+
+    def forward(self, x):
+        # Expected x: (B, 62, T). If a channel dimension is already present,
+        # accept (B, 1, 62, T) as well.
+        if x.dim() == 3:
+            x = x.unsqueeze(1)
+        elif x.dim() != 4:
+            raise ValueError(f"EEGNet expects input (B, C, T) or (B, 1, C, T), got {tuple(x.shape)}")
+        x = self._forward_features(x)
+        return self.fc(x)
+
 # ============================================================
 #  数据加载 (支持 session 划分)
 # ============================================================
@@ -303,7 +461,9 @@ def train_and_evaluate(
     train_data, train_labels, test_data, test_labels,
     epochs=150, batch_size=512, lr=3e-4,
     weight_decay=1e-4, device="cpu", verbose=True, run_name="",
-    d_model=128, n_heads=4, n_layers=3, dropout=0.3,
+    model_type="eegnet", d_model=128, n_heads=4, n_layers=3, dropout=0.3,
+    eegnet_F1=8, eegnet_D=2, eegnet_kernel_length=None,
+    eegnet_depthwise_mode="standard", eegnet_max_norm=1.0,
 ):
     X_train = torch.from_numpy(train_data).float()
     y_train = torch.from_numpy(train_labels).long()
@@ -312,7 +472,7 @@ def train_and_evaluate(
 
     train_loader = DataLoader(
         TensorDataset(X_train, y_train), batch_size=batch_size,
-        shuffle=True, drop_last=True, num_workers=2, pin_memory=True,
+        shuffle=True, drop_last=False, num_workers=2, pin_memory=True,
     )
     test_loader = DataLoader(
         TensorDataset(X_test, y_test), batch_size=batch_size,
@@ -325,9 +485,21 @@ def train_and_evaluate(
     class_weights = class_weights / class_weights.sum() * 3.0
     class_weights = torch.from_numpy(class_weights).to(device)
 
-    model = DEClassifier(
-        d_model=d_model, n_heads=n_heads, n_layers=n_layers, dropout=dropout,
-    ).to(device)
+    if model_type == "eegnet":
+        n_channels, n_times = train_data.shape[1], train_data.shape[2]
+        model = EEGNetClassifier(
+            n_channels=n_channels, n_times=n_times, num_classes=3,
+            F1=eegnet_F1, D=eegnet_D, dropout=dropout,
+            kernel_length=eegnet_kernel_length,
+            depthwise_mode=eegnet_depthwise_mode,
+            max_norm=eegnet_max_norm,
+        ).to(device)
+    elif model_type == "de_transformer":
+        model = DEClassifier(
+            d_model=d_model, n_heads=n_heads, n_layers=n_layers, dropout=dropout,
+        ).to(device)
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  Model params: {n_params:,}")
@@ -532,12 +704,16 @@ def print_comparison(res_no_syn, res_with_syn):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="DE特征 + 分类器评估生成数据质量"
+        description="EEGNet / DE-Transformer 分类器评估生成数据质量"
     )
     parser.add_argument("--data_root", type=str, required=True)
     parser.add_argument("--synthetic_path", type=str, default=None)
-    parser.add_argument("--no_synthetic", action="store_true")
-    parser.add_argument("--compare", action="store_true")
+    parser.add_argument("--no_synthetic", action="store_true",
+                        help="不加载生成数据，只用真实数据训练/评估")
+    parser.add_argument("--real_only", action="store_true",
+                        help="只用真实数据训练/评估；等价于 --no_synthetic，并会关闭 --compare")
+    parser.add_argument("--compare", action="store_true",
+                        help="先跑真实数据 baseline，再跑真实+生成数据，并打印对比")
     parser.add_argument("--split_mode", type=str, default="session",
                         choices=["random", "session", "trial", "subject"],
                         help="session=跨session, trial=跨trial, subject=跨被试(LOSO), random=随机")
@@ -558,10 +734,25 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
 
-    # 模型超参数
+    # 模型选择
+    parser.add_argument("--model", type=str, default="eegnet",
+                        choices=["eegnet", "de_transformer"],
+                        help="默认 eegnet；de_transformer 为原来的 DE+Transformer 评估器")
+
+    # 原 DE-Transformer 超参数，仅 --model de_transformer 时使用
     parser.add_argument("--d_model", type=int, default=128)
     parser.add_argument("--n_heads", type=int, default=4)
     parser.add_argument("--n_layers", type=int, default=3)
+
+    # EEGNet 超参数，仅 --model eegnet 时使用
+    parser.add_argument("--eegnet_F1", type=int, default=8)
+    parser.add_argument("--eegnet_D", type=int, default=2)
+    parser.add_argument("--eegnet_kernel_length", type=int, default=None,
+                        help="EEGNet temporal kernel length；默认 window//2，和 LibEER 一致")
+    parser.add_argument("--eegnet_depthwise_mode", type=str, default="standard",
+                        choices=["standard", "libeer"],
+                        help="standard=标准 EEGNet depthwise spatial conv；libeer=更接近 LibEER 的高容量空间卷积")
+    parser.add_argument("--eegnet_max_norm", type=float, default=1.0)
 
     parser.add_argument("--syn_ratio", type=float, default=1.0,
                         help="使用多少比例的生成数据 (可 >1.0, 会重复采样)")
@@ -571,9 +762,17 @@ def main():
     parser.add_argument("--n_runs", type=int, default=3)
 
     args = parser.parse_args()
+    if args.real_only:
+        args.no_synthetic = True
+        args.compare = False
+
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     subj_str = f"被试 {args.subject}" if args.subject else "所有被试"
-    print(f"Device: {device}, Split: {args.split_mode}, {subj_str}")
+    print(f"Device: {device}, Split: {args.split_mode}, {subj_str}, Model: {args.model}")
+    if args.model == "eegnet":
+        print(f"EEGNet: F1={args.eegnet_F1}, D={args.eegnet_D}, "
+              f"kernel_length={args.eegnet_kernel_length or args.window // 2}, "
+              f"depthwise_mode={args.eegnet_depthwise_mode}")
 
     # ---- 加载数据 (按 session/trial 划分) ----
     print(f"\n加载 SEED 数据...")
@@ -640,8 +839,13 @@ def main():
                 epochs=args.epochs, batch_size=args.batch_size,
                 lr=args.lr, weight_decay=args.weight_decay,
                 device=device, verbose=True, run_name=rn,
+                model_type=args.model,
                 d_model=args.d_model, n_heads=args.n_heads,
                 n_layers=args.n_layers, dropout=args.dropout,
+                eegnet_F1=args.eegnet_F1, eegnet_D=args.eegnet_D,
+                eegnet_kernel_length=args.eegnet_kernel_length,
+                eegnet_depthwise_mode=args.eegnet_depthwise_mode,
+                eegnet_max_norm=args.eegnet_max_norm,
             )
             run_accs.append(results["accuracy"])
             run_f1s.append(results["f1_macro"])

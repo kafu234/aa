@@ -1,0 +1,48 @@
+# ============================================================
+# SEED DE 特征空间生成
+# ============================================================
+# 输入/输出: (62, 5) = 62通道 × 5频带 (delta, theta, alpha, beta, gamma)
+# 数据来源: SEED ExtractedFeatures 的 de_LDS 特征
+# 优势: 维度低(310 vs 49600), 频带信息直接保留, 类间差异更容易学习
+# ============================================================
+
+model:
+  target: Models.interpretable_diffusion.FMTS.FM_TS
+  params:
+    seq_length: 62            # 通道数 (空间PE用电极坐标)
+    feature_size: 5           # 5个频带DE特征 (自动禁用频谱损失和EEGBandBlock)
+    n_layer_enc: 4
+    n_layer_dec: 4
+    d_model: 128
+    n_heads: 4
+    mlp_hidden_times: 4
+    attn_pd: 0.0
+    resid_pd: 0.1
+    kernel_size: 1            # feature_size=5, 大kernel没意义
+    padding_size: 0
+
+solver:
+  base_lr: 3.0e-4
+  max_epochs: 5000
+  gradient_accumulate_every: 2
+  save_cycle: 500
+  ema:
+    decay: 0.995
+    update_interval: 10
+
+dataloader:
+  train_dataset:
+    target: Utils.Data_utils.seed_dataset.SEEDDataset
+    params:
+      name: SEED_DE_GEN
+      data_root: /root/autodl-tmp/ExtractedFeatures
+      data_type: de                 # ← 加载官方DE特征
+      de_key_prefix: de_LDS         # de_LDS1 ~ de_LDS15
+      window: 1                     # DE模式下不使用, 占位
+      proportion: 0.8
+      seed: 42
+      period: train
+      conditional: True
+
+  batch_size: 256                   # DE维度低, batch可以大
+  shuffle: True
