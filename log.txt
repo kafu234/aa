@@ -1,0 +1,690 @@
+===== 评估被试 1 =====
+生成文件: /root/autodl-tmp/results/de_ft/s1/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 1_20131027.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 1_20131027.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 1] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.7712, f1=0.7494, per_class={'negative': 0.45937737281700836, 'neutral': 0.8312056737588652, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7844, f1=0.7671, per_class={'negative': 0.5056947608200456, 'neutral': 0.826950354609929, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8056, f1=0.7925, per_class={'negative': 0.554290053151101, 'neutral': 0.8439716312056738, 'positive': 1.0}
+  平均: acc=0.7871±0.0142, f1=0.7697±0.0177
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.7714, f1=0.7618, per_class={'negative': 0.6226271829916477, 'neutral': 0.6950354609929078, 'positive': 0.984561403508772}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8133, f1=0.8042, per_class={'negative': 0.618830675778284, 'neutral': 0.8177304964539007, 'positive': 0.9887719298245614}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8097, f1=0.7971, per_class={'negative': 0.5679574791192104, 'neutral': 0.8432624113475178, 'positive': 1.0}
+  平均: acc=0.7982±0.0190, f1=0.7877±0.0186
+===== 评估被试 2 =====
+生成文件: /root/autodl-tmp/results/de_ft/s2/generated_filtered.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 2_20140404.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 2_20140404.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 2] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (1035, 62, 5), labels: {0: 345, 1: 345, 2: 345}
+
+使用 258 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8170, f1=0.8149, per_class={'negative': 0.7069096431283219, 'neutral': 0.8028368794326242, 'positive': 0.9326315789473684}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8545, f1=0.8526, per_class={'negative': 0.7752467729688687, 'neutral': 0.8156028368794326, 'positive': 0.9663157894736842}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8427, f1=0.8379, per_class={'negative': 0.6856492027334852, 'neutral': 0.8340425531914893, 'positive': 0.9964912280701754}
+  平均: acc=0.8381±0.0157, f1=0.8351±0.0155
+
+==================================================
+  有生成数据 (train=6288, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8100, f1=0.8122, per_class={'negative': 0.7881548974943052, 'neutral': 0.7773049645390071, 'positive': 0.8624561403508771}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8447, f1=0.8446, per_class={'negative': 0.8367501898253606, 'neutral': 0.7730496453900709, 'positive': 0.9228070175438596}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8331, f1=0.8325, per_class={'negative': 0.7562642369020501, 'neutral': 0.8056737588652483, 'positive': 0.9312280701754386}
+  平均: acc=0.8292±0.0144, f1=0.8298±0.0134
+===== 评估被试 3 =====
+生成文件: /root/autodl-tmp/results/de_ft/s3/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 3_20140603.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 3_20140603.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 3] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8593, f1=0.8536, per_class={'negative': 0.6621108580106302, 'neutral': 0.9815602836879432, 'positive': 0.9207017543859649}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8049, f1=0.7967, per_class={'negative': 0.6028853454821564, 'neutral': 0.8773049645390071, 'positive': 0.92}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8805, f1=0.8732, per_class={'negative': 0.6795747911921033, 'neutral': 0.9475177304964539, 'positive': 1.0}
+  平均: acc=0.8483±0.0319, f1=0.8412±0.0325
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8218, f1=0.8184, per_class={'negative': 0.6917236142748672, 'neutral': 0.875177304964539, 'positive': 0.8891228070175439}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8230, f1=0.8219, per_class={'negative': 0.7015945330296127, 'neutral': 0.9297872340425531, 'positive': 0.8294736842105264}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8456, f1=0.8376, per_class={'negative': 0.6317388003037205, 'neutral': 0.9368794326241134, 'positive': 0.9529824561403509}
+  平均: acc=0.8301±0.0110, f1=0.8259±0.0083
+===== 评估被试 4 =====
+生成文件: /root/autodl-tmp/results/de_ft/s4/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 4_20140621.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 4_20140621.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 4] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.7558, f1=0.7424, per_class={'negative': 0.5148063781321185, 'neutral': 0.8219858156028369, 'positive': 0.9129824561403509}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7529, f1=0.7410, per_class={'negative': 0.5284738041002278, 'neutral': 0.8134751773049645, 'positive': 0.9003508771929825}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.7404, f1=0.7268, per_class={'negative': 0.4988610478359909, 'neutral': 0.8198581560283688, 'positive': 0.8849122807017544}
+  平均: acc=0.7497±0.0067, f1=0.7367±0.0071
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.7970, f1=0.7942, per_class={'negative': 0.7585421412300684, 'neutral': 0.7219858156028369, 'positive': 0.9066666666666666}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8068, f1=0.8038, per_class={'negative': 0.7251328777524677, 'neutral': 0.7836879432624113, 'positive': 0.9052631578947369}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8177, f1=0.8145, per_class={'negative': 0.762338648443432, 'neutral': 0.7510638297872341, 'positive': 0.9347368421052632}
+  平均: acc=0.8072±0.0085, f1=0.8042±0.0083
+===== 评估被试 5 =====
+生成文件: /root/autodl-tmp/results/de_ft/s5/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 5_20140411.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 5_20140411.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 5] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8678, f1=0.8593, per_class={'negative': 0.6256643887623387, 'neutral': 0.9602836879432625, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8312, f1=0.8233, per_class={'negative': 0.6066818526955201, 'neutral': 0.8702127659574468, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8495, f1=0.8417, per_class={'negative': 0.6332574031890661, 'neutral': 0.8992907801418439, 'positive': 1.0}
+  平均: acc=0.8495±0.0149, f1=0.8414±0.0147
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8931, f1=0.8894, per_class={'negative': 0.7251328777524677, 'neutral': 0.9418439716312057, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8683, f1=0.8639, per_class={'negative': 0.6917236142748672, 'neutral': 0.9, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8726, f1=0.8685, per_class={'negative': 0.7000759301442673, 'neutral': 0.9049645390070922, 'positive': 1.0}
+  平均: acc=0.8780±0.0108, f1=0.8739±0.0111
+===== 评估被试 6 =====
+生成文件: /root/autodl-tmp/results/de_ft/s6/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 6_20130712.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 6_20130712.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 6] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8940, f1=0.8924, per_class={'negative': 0.8587699316628702, 'neutral': 0.8425531914893617, 'positive': 0.9775438596491228}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8603, f1=0.8576, per_class={'negative': 0.8276385725132878, 'neutral': 0.775886524822695, 'positive': 0.9740350877192983}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8589, f1=0.8557, per_class={'negative': 0.809415337889142, 'neutral': 0.7780141843971631, 'positive': 0.984561403508772}
+  平均: acc=0.8711±0.0162, f1=0.8686±0.0168
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8579, f1=0.8538, per_class={'negative': 0.7813211845102506, 'neutral': 0.7858156028368795, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8536, f1=0.8488, per_class={'negative': 0.7570235383447228, 'neutral': 0.7957446808510639, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8367, f1=0.8325, per_class={'negative': 0.765375854214123, 'neutral': 0.7382978723404255, 'positive': 1.0}
+  平均: acc=0.8494±0.0091, f1=0.8450±0.0091
+===== 评估被试 7 =====
+生成文件: /root/autodl-tmp/results/de_ft/s7/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 7_20131027.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 7_20131027.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 7] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.9196, f1=0.9183, per_class={'negative': 0.8435839028094153, 'neutral': 0.975177304964539, 'positive': 0.9347368421052632}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8878, f1=0.8857, per_class={'negative': 0.782839787395596, 'neutral': 0.9836879432624114, 'positive': 0.8898245614035087}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.9275, f1=0.9258, per_class={'negative': 0.8283978739559605, 'neutral': 1.0, 'positive': 0.9473684210526315}
+  平均: acc=0.9116±0.0172, f1=0.9099±0.0174
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.9041, f1=0.9021, per_class={'negative': 0.7873955960516325, 'neutral': 0.9744680851063829, 'positive': 0.9424561403508772}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8786, f1=0.8747, per_class={'negative': 0.7099468488990129, 'neutral': 0.9865248226950355, 'positive': 0.927719298245614}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8866, f1=0.8849, per_class={'negative': 0.7987851176917237, 'neutral': 0.9773049645390071, 'positive': 0.8778947368421053}
+  平均: acc=0.8898±0.0107, f1=0.8872±0.0113
+===== 评估被试 8 =====
+生成文件: /root/autodl-tmp/results/de_ft/s8/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 8_20140511.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 8_20140511.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 8] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8451, f1=0.8270, per_class={'negative': 0.5117691723614275, 'neutral': 1.0, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8851, f1=0.8762, per_class={'negative': 0.6378132118451025, 'neutral': 1.0, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8668, f1=0.8562, per_class={'negative': 0.5801063022019742, 'neutral': 1.0, 'positive': 1.0}
+  平均: acc=0.8657±0.0163, f1=0.8531±0.0202
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.9718, f1=0.9712, per_class={'negative': 0.9384965831435079, 'neutral': 0.9744680851063829, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.9388, f1=0.9362, per_class={'negative': 0.8200455580865603, 'neutral': 0.9879432624113476, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.9439, f1=0.9416, per_class={'negative': 0.8230827638572513, 'neutral': 1.0, 'positive': 1.0}
+  平均: acc=0.9515±0.0145, f1=0.9497±0.0154
+===== 评估被试 9 =====
+生成文件: /root/autodl-tmp/results/de_ft/s9/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 9_20140620.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 9_20140620.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 9] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.7565, f1=0.7542, per_class={'negative': 0.7205770690964313, 'neutral': 0.6843971631205674, 'positive': 0.8610526315789474}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7714, f1=0.7685, per_class={'negative': 0.7995444191343963, 'neutral': 0.6404255319148936, 'positive': 0.8750877192982456}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.7548, f1=0.7516, per_class={'negative': 0.7851176917236142, 'neutral': 0.6234042553191489, 'positive': 0.8568421052631578}
+  平均: acc=0.7609±0.0075, f1=0.7581±0.0074
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8061, f1=0.8038, per_class={'negative': 0.8428246013667426, 'neutral': 0.6695035460992907, 'positive': 0.9073684210526316}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8035, f1=0.8040, per_class={'negative': 0.8208048595292331, 'neutral': 0.7326241134751773, 'positive': 0.8575438596491228}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8073, f1=0.8065, per_class={'negative': 0.8071374335611238, 'neutral': 0.7219858156028369, 'positive': 0.8919298245614035}
+  平均: acc=0.8056±0.0016, f1=0.8048±0.0012
+===== 评估被试 10 =====
+生成文件: /root/autodl-tmp/results/de_ft/s10/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 10_20131130.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 10_20131130.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 10] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.7026, f1=0.6788, per_class={'negative': 0.37813211845102507, 'neutral': 0.8191489361702128, 'positive': 0.8870175438596491}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7216, f1=0.6937, per_class={'negative': 0.36370539104024296, 'neutral': 0.8475177304964538, 'positive': 0.927719298245614}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.6956, f1=0.6598, per_class={'negative': 0.29916476841306, 'neutral': 0.8680851063829788, 'positive': 0.8912280701754386}
+  平均: acc=0.7066±0.0110, f1=0.6774±0.0139
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.7100, f1=0.6939, per_class={'negative': 0.4191343963553531, 'neutral': 0.8539007092198582, 'positive': 0.8364912280701754}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7180, f1=0.7028, per_class={'negative': 0.42976461655277143, 'neutral': 0.8460992907801419, 'positive': 0.8575438596491228}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.7233, f1=0.7099, per_class={'negative': 0.4525436598329537, 'neutral': 0.8411347517730496, 'positive': 0.8568421052631578}
+  平均: acc=0.7171±0.0054, f1=0.7022±0.0066
+===== 评估被试 11 =====
+生成文件: /root/autodl-tmp/results/de_ft/s11/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 11_20140618.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 11_20140618.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 11] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8425, f1=0.8380, per_class={'negative': 0.6104783599088838, 'neutral': 0.9900709219858156, 'positive': 0.9108771929824562}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7866, f1=0.7864, per_class={'negative': 0.5861807137433561, 'neutral': 0.9141843971631206, 'positive': 0.8456140350877193}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8213, f1=0.8212, per_class={'negative': 0.6476841305998481, 'neutral': 0.922695035460993, 'positive': 0.8814035087719299}
+  平均: acc=0.8168±0.0230, f1=0.8152±0.0215
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8136, f1=0.8129, per_class={'negative': 0.6408504176157934, 'neutral': 0.8865248226950354, 'positive': 0.9010526315789473}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7953, f1=0.7962, per_class={'negative': 0.6317388003037205, 'neutral': 0.8900709219858156, 'positive': 0.8526315789473684}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8124, f1=0.8110, per_class={'negative': 0.6028853454821564, 'neutral': 0.9673758865248226, 'positive': 0.8526315789473684}
+  平均: acc=0.8071±0.0084, f1=0.8067±0.0075
+===== 评估被试 12 =====
+生成文件: /root/autodl-tmp/results/de_ft/s12/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 12_20131127.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 12_20131127.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 12] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.7702, f1=0.7553, per_class={'negative': 0.5049354593773728, 'neutral': 0.8390070921985816, 'positive': 0.9473684210526315}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7743, f1=0.7644, per_class={'negative': 0.5565679574791192, 'neutral': 0.8070921985815603, 'positive': 0.9431578947368421}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.7791, f1=0.7695, per_class={'negative': 0.568716780561883, 'neutral': 0.8163120567375887, 'positive': 0.9368421052631579}
+  平均: acc=0.7746±0.0036, f1=0.7630±0.0058
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.7924, f1=0.7828, per_class={'negative': 0.5854214123006833, 'neutral': 0.875177304964539, 'positive': 0.9017543859649123}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7953, f1=0.7882, per_class={'negative': 0.6203492786636294, 'neutral': 0.8418439716312057, 'positive': 0.9108771929824562}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8143, f1=0.8099, per_class={'negative': 0.6765375854214123, 'neutral': 0.8900709219858156, 'positive': 0.8666666666666667}
+  平均: acc=0.8007±0.0097, f1=0.7936±0.0117
+===== 评估被试 13 =====
+生成文件: /root/autodl-tmp/results/de_ft/s13/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 13_20140527.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 13_20140527.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 13] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8230, f1=0.8094, per_class={'negative': 0.5679574791192104, 'neutral': 0.8822695035460993, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7977, f1=0.7755, per_class={'negative': 0.4753227031131359, 'neutral': 0.8943262411347518, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8011, f1=0.7767, per_class={'negative': 0.45709946848899013, 'neutral': 0.9212765957446809, 'positive': 1.0}
+  平均: acc=0.8072±0.0112, f1=0.7872±0.0157
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8904, f1=0.8869, per_class={'negative': 0.7585421412300684, 'neutral': 0.9085106382978724, 'positive': 0.9943859649122807}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8709, f1=0.8668, per_class={'negative': 0.7251328777524677, 'neutral': 0.8971631205673759, 'positive': 0.9796491228070175}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8572, f1=0.8467, per_class={'negative': 0.6256643887623387, 'neutral': 0.9290780141843972, 'positive': 1.0}
+  平均: acc=0.8728±0.0136, f1=0.8668±0.0164
+===== 评估被试 14 =====
+生成文件: /root/autodl-tmp/results/de_ft/s14/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 14_20140601.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 14_20140601.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 14] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.7936, f1=0.7909, per_class={'negative': 0.6560364464692483, 'neutral': 0.8914893617021277, 'positive': 0.8238596491228071}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.7705, f1=0.7695, per_class={'negative': 0.6932422171602126, 'neutral': 0.8631205673758865, 'positive': 0.7501754385964913}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.7596, f1=0.7529, per_class={'negative': 0.5702353834472286, 'neutral': 0.9333333333333333, 'positive': 0.7628070175438596}
+  平均: acc=0.7746±0.0142, f1=0.7711±0.0156
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.8042, f1=0.8005, per_class={'negative': 0.6962794229309036, 'neutral': 0.8, 'positive': 0.9080701754385965}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.8179, f1=0.8180, per_class={'negative': 0.9020501138952164, 'neutral': 0.8588652482269503, 'positive': 0.6996491228070175}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.8080, f1=0.8092, per_class={'negative': 0.9020501138952164, 'neutral': 0.7943262411347518, 'positive': 0.7347368421052631}
+  平均: acc=0.8101±0.0058, f1=0.8092±0.0072
+===== 评估被试 15 =====
+生成文件: /root/autodl-tmp/results/de_ft/s15/generated_SEED_DE_GEN_1.npz
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 15_20130709.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=train, samples=6030, shape=(62, 5), classes=[0, 1, 2]
+[SEEDDataset] Labels loaded from: /root/autodl-tmp/label.mat
+[SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
+[SEEDDataset-DE] First file: 15_20130709.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
+[SEEDDataset-DE] Total: 10182 samples, shape: (10182, 62, 5), classes: [0, 1, 2]
+[Trial Split] train trials=[0, 1, 2, 3, 4, 5, 6, 7, 8]: 6030 samples, test trials=[9, 10, 11, 12, 13, 14]: 4152 samples
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[SEEDDataset] period=test, samples=4152, shape=(62, 5), classes=[0, 1, 2]
+[被试 15] Train: (6030, 62, 5), Test: (4152, 62, 5)
+  Train labels: {0: 2043, 1: 1902, 2: 2085}
+  Test  labels: {0: 1317, 1: 1410, 2: 1425}
+[Synthetic] (5000, 62, 5), labels: {0: 1666, 1: 1666, 2: 1668}
+
+使用 1250 合成样本 (syn_ratio=0.25)
+
+==================================================
+  无生成数据 (train=6030, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.9728, f1=0.9723, per_class={'negative': 0.9141989369779803, 'neutral': 1.0, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.9742, f1=0.9738, per_class={'negative': 0.9187547456340167, 'neutral': 1.0, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.9737, f1=0.9733, per_class={'negative': 0.9172361427486713, 'neutral': 1.0, 'positive': 1.0}
+  平均: acc=0.9736±0.0006, f1=0.9732±0.0006
+
+==================================================
+  有生成数据 (train=7280, model=dgcnn)
+==================================================
+  Model: dgcnn, params: 1,021,384
+  Run 1: acc=0.9865, f1=0.9863, per_class={'negative': 0.9627942293090357, 'neutral': 0.9950354609929078, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 2: acc=0.9961, f1=0.9961, per_class={'negative': 1.0, 'neutral': 0.9886524822695035, 'positive': 1.0}
+  Model: dgcnn, params: 1,021,384
+  Run 3: acc=0.9836, f1=0.9834, per_class={'negative': 0.9544419134396356, 'neutral': 0.9943262411347518, 'positive': 1.0}
+  平均: acc=0.9888±0.0054, f1=0.9886±0.0054
