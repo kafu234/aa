@@ -45,6 +45,7 @@ for SUBJ in $(seq 1 15); do
         --checkpoint ${PRETRAIN_DIR}/checkpoint-best.pt \
         --finetune --max_epochs 2000 \
         --num_samples 5000 \
+        --guidance_scale 5.0 \
         --results_dir ${FT_BASE}/s${SUBJ}
 
     # 找生成文件

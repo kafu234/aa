@@ -1,29 +1,32 @@
 """
-eval_de_classifier.py — DE 空间分类评估 (支持 DGCNN / DE Transformer)
+eval_de_classifier_seed4.py — SEED-IV DE 空间分类评估 (支持 DGCNN / DE Transformer)
+====================================================================================
+SEED-IV: 4 类情绪 (neutral, sad, fear, happy), 24 trials/session, 15 被试, 3 sessions
+数据目录: eeg_feature_smooth/1/, /2/, /3/
 
 用法:
     # 纯真实数据 baseline (验证配置)
-    python eval_de_classifier.py \
-        --data_root /root/autodl-tmp/ExtractedFeatures \
+    python eval_de_classifier_seed4.py \
+        --data_root /root/autodl-tmp/eeg_feature_smooth \
         --subject 1 --split_mode trial --real_only \
         --model dgcnn --n_runs 3
 
     # 逐被试 baseline
-    python eval_de_classifier.py \
-        --data_root /root/autodl-tmp/ExtractedFeatures \
+    python eval_de_classifier_seed4.py \
+        --data_root /root/autodl-tmp/eeg_feature_smooth \
         --split_mode trial --real_only --baseline \
         --model dgcnn --n_runs 1
 
     # 诊断合成数据
-    python eval_de_classifier.py \
-        --data_root /root/autodl-tmp/ExtractedFeatures \
-        --synthetic_path ./results/s1_de_cond/generated_SEED_DE_GEN_1.npz \
+    python eval_de_classifier_seed4.py \
+        --data_root /root/autodl-tmp/eeg_feature_smooth \
+        --synthetic_path ./results/s1_de_cond/generated_SEEDIV_DE_GEN_5.npz \
         --subject 1 --split_mode trial --mode diagnose --model dgcnn
 
     # 对比评估
-    python eval_de_classifier.py \
-        --data_root /root/autodl-tmp/ExtractedFeatures \
-        --synthetic_path ./results/s1_de_cond/generated_SEED_DE_GEN_1.npz \
+    python eval_de_classifier_seed4.py \
+        --data_root /root/autodl-tmp/eeg_feature_smooth \
+        --synthetic_path ./results/s1_de_cond/generated_SEEDIV_DE_GEN_5.npz \
         --subject 1 --split_mode trial --mode compare --model dgcnn \
         --syn_ratio 0.25 --n_runs 3
 """
@@ -38,6 +41,10 @@ from sklearn.metrics import accuracy_score, f1_score
 from tqdm.auto import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# SEED-IV: 4 类
+NUM_CLASSES = 4
+LABEL_NAMES = {0: "neutral", 1: "sad", 2: "fear", 3: "happy"}
 
 
 # ============================================================
@@ -91,7 +98,7 @@ class B1ReLU(nn.Module):
 
 
 class DGCNN(nn.Module):
-    def __init__(self, num_electrodes=62, in_channels=5, num_classes=4,
+    def __init__(self, num_electrodes=62, in_channels=5, num_classes=NUM_CLASSES,
                  k=2, layers=None, dropout_rate=0.5):
         super().__init__()
         self.num_electrodes = num_electrodes
@@ -121,7 +128,7 @@ class DGCNN(nn.Module):
         nn.init.xavier_normal_(self.fc2.weight); nn.init.zeros_(self.fc2.bias)
 
     def forward(self, x):
-        """x: (B, 62, 5) → (B, 3)"""
+        """x: (B, 62, 5) → (B, NUM_CLASSES)"""
         adj = self.relu(self.adj + self.adj_bias)
         lap = laplacian(adj)
         for i in range(len(self.layers)):
@@ -166,7 +173,7 @@ def _get_seed_62_coords():
 
 class DETransformer(nn.Module):
     def __init__(self, n_channels=62, n_bands=5, d_model=128,
-                 n_heads=4, n_layers=3, dropout=0.3, num_classes=4):
+                 n_heads=4, n_layers=3, dropout=0.3, num_classes=NUM_CLASSES):
         super().__init__()
         self.band_embed = nn.Sequential(
             nn.Linear(n_bands, d_model), nn.GELU(), nn.LayerNorm(d_model))
@@ -194,19 +201,19 @@ class DETransformer(nn.Module):
 
 def load_de_data(data_root, seed=42, split_mode="trial", subject=None,
                  train_trials=None, test_trials=None, test_subject=None):
-    from Utils.Data_utils.seed4_dataset import SEEDIVDataset as SEEDDataset, NUM_CLASSES, LABEL_NAMES
+    from Utils.Data_utils.seed4_dataset import SEEDIVDataset
     subjects = [subject] if (subject is not None and split_mode != "subject") else None
     common = dict(
-        name="SEED_DE", data_root=data_root, data_type="de",
-        de_key_prefix="de_LDS", window=1, proportion=1.0, seed=seed,
-        conditional=True, sfreq=200, split_mode=split_mode, subjects=subjects,
+        name="SEEDIV_DE", data_root=data_root, data_type="de",
+        de_key_prefix="de_LDS", proportion=1.0, seed=seed,
+        conditional=True, split_mode=split_mode, subjects=subjects,
     )
     if train_trials is not None: common["train_trials"] = train_trials
     if test_trials is not None: common["test_trials"] = test_trials
     if test_subject is not None: common["test_subject"] = test_subject
 
-    ds_train = SEEDDataset(**common, period="train")
-    ds_test  = SEEDDataset(**common, period="test")
+    ds_train = SEEDIVDataset(**common, period="train")
+    ds_test  = SEEDIVDataset(**common, period="test")
     subj_str = f"被试 {subject}" if subject else "所有被试"
     print(f"[{subj_str}] Train: {ds_train.samples.shape}, Test: {ds_test.samples.shape}")
     print(f"  Train labels: {dict(zip(*np.unique(ds_train.labels, return_counts=True)))}")
@@ -228,10 +235,10 @@ def load_synthetic_de(path):
 
 def build_model(model_type, dropout=0.5, device="cpu"):
     if model_type == "dgcnn":
-        model = DGCNN(num_electrodes=62, in_channels=5, num_classes=4,
+        model = DGCNN(num_electrodes=62, in_channels=5, num_classes=NUM_CLASSES,
                        k=2, dropout_rate=dropout)
     elif model_type == "de_transformer":
-        model = DETransformer(dropout=dropout)
+        model = DETransformer(dropout=dropout, num_classes=NUM_CLASSES)
     else:
         raise ValueError(f"Unknown model: {model_type}")
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -250,8 +257,9 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
     loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=batch_size, shuffle=True, drop_last=False)
     test_loader = DataLoader(TensorDataset(X_te, y_te), batch_size=batch_size, shuffle=False)
 
-    cw = 1.0 / (np.bincount(train_labels, minlength=3).astype(np.float32) + 1e-6)
-    cw = torch.from_numpy(cw / cw.sum() * 3).to(device)
+    # [FIX] minlength=NUM_CLASSES (4), 归一化乘以 NUM_CLASSES
+    cw = 1.0 / (np.bincount(train_labels, minlength=NUM_CLASSES).astype(np.float32) + 1e-6)
+    cw = torch.from_numpy(cw / cw.sum() * NUM_CLASSES).to(device)
 
     model = build_model(model_type, dropout, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -295,8 +303,11 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
 
     acc = accuracy_score(trues, preds)
     f1 = f1_score(trues, preds, average="macro")
-    names = ["neutral", "sad", "fear", "happy"]
-    per_class = {names[c]: float((preds[trues==c]==c).mean()) if (trues==c).sum()>0 else 0.0 for c in range(3)}
+    # [FIX] range(NUM_CLASSES) 遍历全部 4 类
+    per_class = {
+        LABEL_NAMES[c]: float((preds[trues == c] == c).mean()) if (trues == c).sum() > 0 else 0.0
+        for c in range(NUM_CLASSES)
+    }
 
     return {"accuracy": acc, "f1_macro": f1, "per_class_acc": per_class,
             "best_epoch": best_ep, "model": model,
@@ -309,7 +320,6 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
 
 def diagnose(model, syn_data, syn_labels, device):
     model.eval()
-    names = {0: "neutral", 1: "sad", 2: "fear", 3: "happy"}
     loader = DataLoader(TensorDataset(torch.from_numpy(syn_data).float()), batch_size=1024)
     all_preds, all_probs = [], []
     with torch.no_grad():
@@ -322,14 +332,19 @@ def diagnose(model, syn_data, syn_labels, device):
     print(f"\n{'='*60}")
     print(f"  DE 合成数据质量诊断 ({len(syn_labels)} samples)")
     print(f"{'='*60}")
-    for c in range(3):
+    # [FIX] range(NUM_CLASSES) 遍历全部 4 类
+    for c in range(NUM_CLASSES):
         mask = syn_labels == c
         n = mask.sum()
         if n == 0: continue
         acc = (preds[mask] == c).mean()
         conf = probs[mask, c].mean()
-        dist = {names[pc]: f"{(preds[mask]==pc).sum()}({(preds[mask]==pc).mean()*100:.1f}%)" for pc in range(3)}
-        print(f"\n  {names[c]} ({n} samples): 正确率={acc:.3f}, 置信={conf:.3f}")
+        # [FIX] range(NUM_CLASSES) 统计全部 4 类的预测分布
+        dist = {
+            LABEL_NAMES[pc]: f"{(preds[mask]==pc).sum()}({(preds[mask]==pc).mean()*100:.1f}%)"
+            for pc in range(NUM_CLASSES)
+        }
+        print(f"\n  {LABEL_NAMES[c]} ({n} samples): 正确率={acc:.3f}, 置信={conf:.3f}")
         print(f"    预测分布: {dist}")
     overall = (preds == syn_labels).mean()
     print(f"\n  总体正确率: {overall:.3f}")
@@ -352,7 +367,8 @@ def run_baseline(args, device):
     test_trials = [int(x) for x in args.test_trials.split(",")] if args.test_trials else None
 
     print(f"\n{'#'*60}")
-    print(f"  Baseline: 纯真实数据, 逐被试, {args.model}")
+    print(f"  SEED-IV Baseline: 纯真实数据, 逐被试, {args.model}")
+    print(f"  {NUM_CLASSES} 类: {', '.join(LABEL_NAMES[c] for c in range(NUM_CLASSES))}")
     print(f"{'#'*60}\n")
 
     all_accs, all_f1s = [], []
@@ -395,8 +411,10 @@ def run_baseline(args, device):
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_root", type=str, required=True)
+    parser = argparse.ArgumentParser(
+        description="SEED-IV DE 空间分类评估 (4类: neutral/sad/fear/happy)")
+    parser.add_argument("--data_root", type=str, required=True,
+                        help="SEED-IV DE 特征目录, 如 /root/autodl-tmp/eeg_feature_smooth")
     parser.add_argument("--synthetic_path", type=str, default=None)
     parser.add_argument("--subject", type=int, default=None)
     parser.add_argument("--split_mode", type=str, default="trial")
@@ -436,7 +454,7 @@ def main():
         tr_d, tr_l, te_d, te_l = load_de_data(
             args.data_root, args.seed, args.split_mode, args.subject,
             train_trials, test_trials, args.test_subject)
-        print(f"\n纯真实数据评估 ({args.model}):")
+        print(f"\n纯真实数据评估 ({args.model}, {NUM_CLASSES}类):")
         accs, f1s = [], []
         for r in range(args.n_runs):
             torch.manual_seed(args.seed + r); np.random.seed(args.seed + r)
