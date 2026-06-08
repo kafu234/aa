@@ -312,6 +312,55 @@ class FM_TS(nn.Module):
             "relative_rmse": (pairwise_rmse / output_rms).item(),
         }
 
+    def _sampling_schedule(self, device, t_start=0.0):
+        t_start = float(np.clip(t_start, 0.0, 1.0))
+        timesteps = torch.linspace(0, 1, self.num_timesteps + 1, device=device)
+        t_shifted = 1 - (self.alpha * timesteps) / (1 + (self.alpha - 1) * timesteps)
+        schedule = t_shifted.flip(0)
+        if t_start <= 0:
+            return schedule
+
+        schedule = schedule[schedule >= t_start]
+        start = torch.tensor([t_start], device=device, dtype=schedule.dtype)
+        if schedule.numel() == 0:
+            return torch.cat([start, torch.ones(1, device=device, dtype=schedule.dtype)])
+        if torch.abs(schedule[0] - start[0]) > 1e-6:
+            schedule = torch.cat([start, schedule])
+        if schedule[-1] < 1.0:
+            schedule = torch.cat([schedule, torch.ones(1, device=device, dtype=schedule.dtype)])
+        return schedule
+
+    def _sampling_label_embedding(self, labels, batch_size, device):
+        label_emb = None
+        use_cfg = False
+        if labels is not None and self.label_embedding is not None:
+            if isinstance(labels, int):
+                labels = torch.full((batch_size,), labels, dtype=torch.long, device=device)
+            elif not torch.is_tensor(labels):
+                labels = torch.as_tensor(labels, dtype=torch.long, device=device)
+            else:
+                labels = labels.to(device=device, dtype=torch.long)
+            label_emb = self.label_embedding(labels)
+            # 只在 guidance_scale != 1.0 且训练时用了 cfg_dropout 时启用 CFG
+            if self.guidance_scale != 1.0 and self.cfg_dropout > 0:
+                use_cfg = True
+        return label_emb, use_cfg
+
+    def _guided_velocity(self, zt, t_curr, label_emb=None, use_cfg=False):
+        t_input = torch.full(
+            (zt.shape[0],),
+            float(t_curr) * self.time_scalar,
+            device=zt.device,
+            dtype=zt.dtype,
+        )
+        v_cond = self.output(zt.clone(), t_input, padding_masks=None, label_emb=label_emb)
+
+        if use_cfg:
+            zero_emb = torch.zeros_like(label_emb)
+            v_uncond = self.output(zt.clone(), t_input, padding_masks=None, label_emb=zero_emb)
+            return v_uncond + self.guidance_scale * (v_cond - v_uncond)
+        return v_cond
+
     @torch.no_grad()
     def sample(self, shape, labels=None):
         """
@@ -321,44 +370,54 @@ class FM_TS(nn.Module):
         guidance_scale=1.0 等同于普通条件生成, >1.0 增强条件信号.
         """
         self.eval()
-        zt = torch.randn(shape).cuda()
+        device = next(self.parameters()).device
+        zt = torch.randn(shape, device=device)
 
-        label_emb = None
-        use_cfg = False
-        if labels is not None and self.label_embedding is not None:
-            label_emb = self.label_embedding(labels.cuda())
-            # 只在 guidance_scale != 1.0 且训练时用了 cfg_dropout 时启用 CFG
-            if self.guidance_scale != 1.0 and self.cfg_dropout > 0:
-                use_cfg = True
+        label_emb, use_cfg = self._sampling_label_embedding(labels, zt.shape[0], device)
+        schedule = self._sampling_schedule(device)
 
-        timesteps = torch.linspace(0, 1, self.num_timesteps + 1)
-        t_shifted = 1 - (self.alpha * timesteps) / (1 + (self.alpha - 1) * timesteps)
-        t_shifted = t_shifted.flip(0)
-
-        for t_curr, t_prev in zip(t_shifted[:-1], t_shifted[1:]):
+        for t_curr, t_prev in zip(schedule[:-1], schedule[1:]):
             step = t_prev - t_curr
-            t_input = torch.tensor([t_curr * self.time_scalar]).unsqueeze(0).repeat(zt.shape[0], 1).cuda().squeeze()
-
-            # 条件预测
-            v_cond = self.output(zt.clone(), t_input, padding_masks=None, label_emb=label_emb)
-
-            if use_cfg:
-                # 无条件预测 (label_emb=None → 零向量)
-                zero_emb = torch.zeros_like(label_emb)
-                v_uncond = self.output(zt.clone(), t_input, padding_masks=None, label_emb=zero_emb)
-                # CFG 插值: 增强条件方向
-                v = v_uncond + self.guidance_scale * (v_cond - v_uncond)
-            else:
-                v = v_cond
-
+            v = self._guided_velocity(zt, t_curr, label_emb=label_emb, use_cfg=use_cfg)
             zt = zt.clone() + step * v
 
         return zt
 
-    def generate_mts(self, batch_size=16, labels=None):
+    @torch.no_grad()
+    def sample_anchored(self, anchors, labels=None, t_start=0.75):
+        """
+        Real-anchored flow sampling.
+
+        Instead of integrating all the way from pure Gaussian noise, start from
+        z_t = t_start * anchor + (1 - t_start) * noise and only solve the last
+        part of the ODE. For DE augmentation this preserves the subject/class
+        manifold much better while still letting the flow model add variation.
+        """
+        self.eval()
+        device = next(self.parameters()).device
+        anchors = anchors.to(device=device, dtype=torch.float32)
+        t_start = float(np.clip(t_start, 0.0, 1.0))
+        z0 = torch.randn_like(anchors)
+        zt = t_start * anchors + (1.0 - t_start) * z0
+
+        label_emb, use_cfg = self._sampling_label_embedding(labels, zt.shape[0], device)
+        schedule = self._sampling_schedule(device, t_start=t_start)
+
+        for t_curr, t_prev in zip(schedule[:-1], schedule[1:]):
+            step = t_prev - t_curr
+            v = self._guided_velocity(zt, t_curr, label_emb=label_emb, use_cfg=use_cfg)
+            zt = zt.clone() + step * v
+
+        return zt
+
+    def generate_mts(self, batch_size=16, labels=None, anchors=None, t_start=0.75):
         feature_size, seq_length = self.feature_size, self.seq_length
+        if anchors is not None:
+            batch_size = anchors.shape[0]
         if isinstance(labels, int):
             labels = torch.full((batch_size,), labels, dtype=torch.long)
+        if anchors is not None:
+            return self.sample_anchored(anchors, labels=labels, t_start=t_start)
         return self.sample((batch_size, seq_length, feature_size), labels=labels)
 
     def _train_loss(self, x_start, labels=None):

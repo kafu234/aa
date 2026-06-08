@@ -23,6 +23,8 @@ CLS_EPOCHS=${CLS_EPOCHS:-100}
 PRETRAIN_EPOCHS=${PRETRAIN_EPOCHS:-3000}
 FINETUNE_EPOCHS=${FINETUNE_EPOCHS:-1500}
 RUN_PRETRAIN=${RUN_PRETRAIN:-1}
+SAMPLE_MODE=${SAMPLE_MODE:-anchored}
+ANCHOR_T_START=${ANCHOR_T_START:-0.75}
 EXP_NAME=${EXP_NAME:-"seed4_de_noiseaware_cw01_margin005_fast"}
 DATA_ROOT=${DATA_ROOT:-"/root/autodl-tmp/eeg_feature_smooth"}
 FEAT_ROOT=${FEAT_ROOT:-"/root/autodl-tmp/eeg_feature_smooth"}
@@ -44,6 +46,8 @@ echo "CONDITION_MARGIN_WEIGHT=${CONDITION_MARGIN_WEIGHT}"
 echo "CLS_EPOCHS=${CLS_EPOCHS}"
 echo "PRETRAIN_EPOCHS=${PRETRAIN_EPOCHS}"
 echo "FINETUNE_EPOCHS=${FINETUNE_EPOCHS}"
+echo "SAMPLE_MODE=${SAMPLE_MODE}"
+echo "ANCHOR_T_START=${ANCHOR_T_START}"
 echo "PRETRAIN_DIR=${PRETRAIN_DIR}"
 echo "FT_BASE=${FT_BASE}"
 
@@ -57,6 +61,7 @@ if [ "${RUN_PRETRAIN}" = "1" ]; then
         --split_mode trial \
         --train_trials ${TRAIN_TRIALS} --test_trials ${TEST_TRIALS} \
         --max_epochs ${PRETRAIN_EPOCHS} \
+        --sample_mode ${SAMPLE_MODE} --anchor_t_start ${ANCHOR_T_START} \
         --results_dir ${PRETRAIN_DIR}
 else
     echo "====== [第一步] 跳过预训练, 使用已有 checkpoint ======"
@@ -80,6 +85,7 @@ for SUBJ in ${SUBJECTS}; do
         --checkpoint ${PRETRAIN_DIR}/checkpoint-best.pt \
         --finetune --max_epochs ${FINETUNE_EPOCHS} \
         --num_samples 5000 \
+        --sample_mode ${SAMPLE_MODE} --anchor_t_start ${ANCHOR_T_START} \
         --results_dir ${FT_BASE}/s${SUBJ}
 
     # 找生成文件

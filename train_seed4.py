@@ -176,24 +176,70 @@ class SEEDTrainer:
         if missing:
             print(f"  Missing {len(missing)} keys (new modules will be randomly initialized)")
 
+    def _sample_anchor_batch(self, batch_labels, batch_size):
+        dataset = self.train_loader.dataset
+        real_samples = np.asarray(dataset.samples)
+        real_labels = np.asarray(dataset.labels).astype(int)
+        if real_samples.shape[0] == 0:
+            raise ValueError("Cannot use anchored sampling: training dataset is empty")
+
+        if batch_labels is None:
+            indices = np.random.randint(0, real_samples.shape[0], size=batch_size)
+            anchor_labels = real_labels[indices]
+        else:
+            if torch.is_tensor(batch_labels):
+                batch_label_np = batch_labels.detach().cpu().numpy().astype(int)
+            else:
+                batch_label_np = np.asarray(batch_labels, dtype=int)
+            indices = []
+            for label in batch_label_np:
+                candidates = np.flatnonzero(real_labels == label)
+                if candidates.size == 0:
+                    candidates = np.arange(real_samples.shape[0])
+                indices.append(np.random.choice(candidates))
+            indices = np.asarray(indices, dtype=int)
+            anchor_labels = batch_label_np
+
+        anchors = torch.from_numpy(real_samples[indices]).float()
+        anchor_labels = torch.as_tensor(anchor_labels, dtype=torch.long)
+        return anchors, anchor_labels
+
     @torch.no_grad()
-    def generate(self, num_samples, batch_size=64, labels=None):
+    def generate(self, num_samples, batch_size=64, labels=None,
+                 sample_mode="full", anchor_t_start=0.75):
+        if sample_mode not in {"full", "anchored"}:
+            raise ValueError(f"Unknown sample_mode: {sample_mode}")
+
         self.ema.shadow.eval()
         all_samples, all_labels = [], []
         total_batches = (num_samples + batch_size - 1) // batch_size
         for start in tqdm(range(0, num_samples, batch_size), total=total_batches, desc="Generating"):
             bs = min(batch_size, num_samples - start)
+            batch_labels = None
+            record_labels = [0] * bs
+
             if labels is None:
-                samples = self.ema.shadow.generate_mts(batch_size=bs, labels=None)
-                all_labels.extend([0] * bs)
+                pass
             elif isinstance(labels, int):
-                samples = self.ema.shadow.generate_mts(batch_size=bs, labels=labels)
-                all_labels.extend([labels] * bs)
+                batch_labels = torch.full((bs,), labels, dtype=torch.long)
+                record_labels = [labels] * bs
             else:
                 batch_labels = torch.tensor(labels[start:start+bs], dtype=torch.long)
-                samples = self.ema.shadow.generate_mts(batch_size=bs, labels=batch_labels)
-                all_labels.extend(batch_labels.tolist())
+                record_labels = batch_labels.tolist()
+
+            anchors = None
+            if sample_mode == "anchored":
+                anchors, anchor_labels = self._sample_anchor_batch(batch_labels, bs)
+                if batch_labels is None:
+                    record_labels = anchor_labels.tolist()
+                    if self.ema.shadow.label_embedding is not None:
+                        batch_labels = anchor_labels
+
+            samples = self.ema.shadow.generate_mts(
+                batch_size=bs, labels=batch_labels, anchors=anchors,
+                t_start=anchor_t_start)
             all_samples.append(samples.cpu().numpy())
+            all_labels.extend(record_labels)
         return np.concatenate(all_samples, axis=0)[:num_samples], np.array(all_labels[:num_samples])
 
 
@@ -213,6 +259,11 @@ def main():
     parser.add_argument("--sample_only", action="store_true")
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--num_samples", type=int, default=0)
+    parser.add_argument("--sample_mode", type=str, default="full",
+                        choices=["full", "anchored"],
+                        help="生成方式: full=纯噪声起步, anchored=同类真实样本附近起步")
+    parser.add_argument("--anchor_t_start", type=float, default=0.75,
+                        help="anchored 生成的起始时间, 越大越像真实 anchor, 越小变化越大")
     parser.add_argument("--results_dir", type=str, default=None)
     parser.add_argument("--target_label", type=int, default=None, choices=[0, 1, 2, 3])
     parser.add_argument("--classifier_weight", type=float, default=0.02)
@@ -281,11 +332,15 @@ def main():
     train_dataset = SEEDDataset(**ds_cfg)
     print_dataset_stats(train_dataset)
 
+    batch_size = config["dataloader"].get("batch_size", 64)
+    drop_last = len(train_dataset) >= batch_size
+    if not drop_last:
+        print(f"[DataLoader] dataset size {len(train_dataset)} < batch_size {batch_size}; drop_last=False")
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config["dataloader"].get("batch_size", 64),
+        batch_size=batch_size,
         shuffle=config["dataloader"].get("shuffle", True),
-        num_workers=4, pin_memory=True, drop_last=True,
+        num_workers=4, pin_memory=True, drop_last=drop_last,
     )
 
     model_cfg = config["model"]["params"]
@@ -353,12 +408,15 @@ def main():
     # 生成样本
     num_gen = args.num_samples if args.num_samples > 0 else len(train_dataset)
     print(f"\nGenerating {num_gen} samples...")
+    print(f"  → sample_mode={args.sample_mode}, anchor_t_start={args.anchor_t_start}")
 
     if args.conditional:
         if args.target_label is not None:
             label_name = LABEL_NAMES[args.target_label]
             print(f"  → Generating class: {label_name} (label={args.target_label})")
-            samples, labels = trainer.generate(num_gen, labels=args.target_label)
+            samples, labels = trainer.generate(
+                num_gen, labels=args.target_label, sample_mode=args.sample_mode,
+                anchor_t_start=args.anchor_t_start)
         else:
             print(f"  → Generating all {NUM_CLASSES} classes equally")
             per_class = num_gen // NUM_CLASSES
@@ -367,9 +425,12 @@ def main():
             ] + [np.full(num_gen - per_class * (NUM_CLASSES - 1), NUM_CLASSES - 1)])
             gen_labels = gen_labels.astype(int)
             np.random.shuffle(gen_labels)
-            samples, labels = trainer.generate(num_gen, labels=gen_labels)
+            samples, labels = trainer.generate(
+                num_gen, labels=gen_labels, sample_mode=args.sample_mode,
+                anchor_t_start=args.anchor_t_start)
     else:
-        samples, labels = trainer.generate(num_gen)
+        samples, labels = trainer.generate(
+            num_gen, sample_mode=args.sample_mode, anchor_t_start=args.anchor_t_start)
 
     CLIP_STD = 5.0
     samples = samples * CLIP_STD
