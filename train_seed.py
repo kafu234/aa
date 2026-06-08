@@ -150,22 +150,26 @@ class SEEDTrainer:
                         self.best_loss = total_loss
                         self.save("checkpoint-best.pt")
 
-        self.save("checkpoint-best.pt")
+        self.save("checkpoint-last.pt")
+        best_path = self.results_dir / "checkpoint-best.pt"
+        if not best_path.exists():
+            self.best_loss = total_loss
+            self.save("checkpoint-best.pt")
         elapsed = time.time() - tic
         print(f"\nTraining complete. Time: {elapsed:.1f}s ({elapsed/60:.1f}min)")
 
     def save(self, filename):
         path = self.results_dir / filename
         torch.save({
-            "step": self.step, "model": self.model.state_dict(),
-            "ema": self.ema.state_dict(), "optimizer": self.optimizer.state_dict(),
+            "step": self.step, "model": self.model.generator_state_dict(),
+            "ema": self.ema.shadow.generator_state_dict(), "optimizer": self.optimizer.state_dict(),
             "best_loss": self.best_loss,
         }, path)
 
     def load(self, path):
         data = torch.load(path, map_location=self.device)
-        missing, unexpected = self.model.load_state_dict(data["model"], strict=False)
-        self.ema.load_state_dict(data["ema"], strict=False)
+        missing, unexpected = self.model.load_generator_state_dict(data["model"])
+        self.ema.shadow.load_generator_state_dict(data["ema"])
         try:
             self.optimizer.load_state_dict(data["optimizer"])
         except Exception:
@@ -222,6 +226,10 @@ def main():
     parser.add_argument("--cfg_dropout", type=float, default=0.15)
     parser.add_argument("--guidance_scale", type=float, default=2.0)
     parser.add_argument("--spectral_weight", type=float, default=0.1)
+    parser.add_argument("--condition_margin_weight", type=float, default=0.0)
+    parser.add_argument("--condition_margin", type=float, default=0.02)
+    parser.add_argument("--condition_margin_max_t", type=float, default=0.8)
+    parser.add_argument("--condition_margin_batch", type=int, default=64)
     parser.add_argument("--split_mode", type=str, default="session",
                         choices=["random", "session", "trial", "subject"])
     parser.add_argument("--subject", type=int, default=None)
@@ -293,9 +301,15 @@ def main():
         model_cfg["cfg_dropout"] = args.cfg_dropout
         model_cfg["spectral_weight"] = args.spectral_weight
         model_cfg["guidance_scale"] = args.guidance_scale
+        model_cfg["condition_margin_weight"] = args.condition_margin_weight
+        model_cfg["condition_margin"] = args.condition_margin
+        model_cfg["condition_margin_max_t"] = args.condition_margin_max_t
+        model_cfg["condition_margin_batch"] = args.condition_margin_batch
         print(f"\n[Conditional mode] num_classes=3, classifier_weight={args.classifier_weight}, "
               f"cfg_dropout={args.cfg_dropout}, spectral_weight={args.spectral_weight}, "
-              f"guidance_scale={args.guidance_scale}")
+              f"guidance_scale={args.guidance_scale}, condition_margin_weight={args.condition_margin_weight}, "
+              f"condition_margin={args.condition_margin}, condition_margin_max_t={args.condition_margin_max_t}, "
+              f"condition_margin_batch={args.condition_margin_batch}")
     else:
         model_cfg["num_classes"] = 0
 
@@ -303,21 +317,6 @@ def main():
     model = FM_TS(**model_cfg).to(device)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {num_params:,} ({num_params/1e6:.2f}M)\n")
-
-    # === 改动3: unlabeled_finetune 时跳过分类器预训练 ===
-    if args.conditional and args.classifier_weight > 0 and not args.unlabeled_finetune:
-        if args.results_dir is None:
-            args.results_dir = f"./results/{ds_cfg.get('name', 'SEED')}"
-        os.makedirs(args.results_dir, exist_ok=True)
-        classifier_path = os.path.join(args.results_dir, "guidance_classifier.pt")
-        if os.path.exists(classifier_path):
-            model.load_classifier(classifier_path, device=device)
-        else:
-            real_data = train_dataset.samples
-            real_labels = train_dataset.labels
-            model.pretrain_classifier(
-                real_data, real_labels, epochs=args.cls_epochs, device=device)
-            model.save_classifier(classifier_path)
 
     if args.results_dir is None:
         args.results_dir = f"./results/{ds_cfg.get('name', 'SEED')}"
@@ -331,8 +330,31 @@ def main():
             trainer.best_loss = float("inf")
             print(f"[Finetune] 重置训练步数: step=0, max_epochs={trainer.max_epochs}")
 
+    # === Guidance Classifier: 必须在 checkpoint 加载之后, 避免被覆盖 ===
+    if args.conditional and args.classifier_weight > 0 and not args.unlabeled_finetune:
+        os.makedirs(args.results_dir, exist_ok=True)
+        classifier_path = os.path.join(args.results_dir, "guidance_classifier.pt")
+        if os.path.exists(classifier_path):
+            model.load_classifier(classifier_path, device=device)
+        else:
+            real_data = train_dataset.samples
+            real_labels = train_dataset.labels
+            model.pretrain_classifier(
+                real_data, real_labels, epochs=args.cls_epochs, device=device)
+            model.save_classifier(classifier_path)
+
     if not args.sample_only:
         trainer.train()
+        # 加载最佳 checkpoint 用于生成 (训练结束时的模型不一定是最优的)
+        best_ckpt = os.path.join(args.results_dir, "checkpoint-best.pt")
+        if os.path.exists(best_ckpt):
+            print(f"[Generate] 加载最佳 checkpoint: {best_ckpt}")
+            trainer.load(best_ckpt)
+
+    if args.conditional:
+        sensitivity = trainer.ema.shadow.condition_sensitivity()
+        print(f"[Condition sensitivity] pairwise_rmse={sensitivity['pairwise_rmse']:.6f}, "
+              f"relative_rmse={sensitivity['relative_rmse']:.4f}")
 
     # 生成样本
     num_gen = args.num_samples if args.num_samples > 0 else len(train_dataset)

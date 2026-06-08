@@ -186,8 +186,13 @@ class SEEDTrainer:
                     self.best_loss = total_loss
                     self.save("checkpoint-best.pt")
 
-        # 保留最终模型，也便于 sample_only 使用
-        self.save("checkpoint-best.pt")
+        # Preserve the final state for resuming, but generate from the best EMA.
+        self.save("checkpoint-last.pt")
+        best_path = self.results_dir / "checkpoint-best.pt"
+        if not best_path.exists():
+            self.best_loss = total_loss
+            self.save("checkpoint-best.pt")
+        self.load(best_path)
         elapsed = time.time() - tic
         print(f"Training complete. Time: {elapsed:.1f}s ({elapsed/60:.1f}min)")
 
@@ -196,8 +201,8 @@ class SEEDTrainer:
         torch.save(
             {
                 "step": self.step,
-                "model": self.model.state_dict(),
-                "ema": self.ema.state_dict(),
+                "model": self.model.generator_state_dict(),
+                "ema": self.ema.shadow.generator_state_dict(),
                 "optimizer": self.optimizer.state_dict(),
                 "best_loss": self.best_loss,
             },
@@ -206,8 +211,8 @@ class SEEDTrainer:
 
     def load(self, path, finetune=False):
         data = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(data["model"], strict=False)
-        self.ema.load_state_dict(data["ema"], strict=False)
+        self.model.load_generator_state_dict(data["model"])
+        self.ema.shadow.load_generator_state_dict(data["ema"])
         if not finetune:
             try:
                 self.optimizer.load_state_dict(data["optimizer"])

@@ -110,7 +110,11 @@ class FM_TS(nn.Module):
             classifier_weight=0.02,
             cfg_dropout=0.15,        # ← NEW: CFG 训练时随机丢弃标签的概率
             spectral_weight=0.1,     # ← NEW: 频谱一致性损失权重
-            guidance_scale=2.0,      # ← NEW: CFG 推理时的引导强度
+            guidance_scale=2.0,
+            condition_margin_weight=0.0,
+            condition_margin=0.02,
+            condition_margin_max_t=0.8,
+            condition_margin_batch=64,
             **kwargs
     ):
         super(FM_TS, self).__init__()
@@ -121,6 +125,10 @@ class FM_TS(nn.Module):
         self.classifier_weight = classifier_weight
         self.cfg_dropout = cfg_dropout
         self.guidance_scale = guidance_scale
+        self.condition_margin_weight = condition_margin_weight
+        self.condition_margin = condition_margin
+        self.condition_margin_max_t = condition_margin_max_t
+        self.condition_margin_batch = condition_margin_batch
 
         # DE 模式 (feature_size<=10): 禁用频谱损失 (5个频带特征做FFT无意义)
         if feature_size <= 10 and spectral_weight > 0:
@@ -151,26 +159,42 @@ class FM_TS(nn.Module):
         self.time_scalar = 1000
         self.num_timesteps = int(os.environ.get('hucfg_num_steps', '100'))
 
+    # Guidance classifier is saved separately from generator checkpoints.
+    # This prevents a pretrained or subject-specific classifier from being
+    # silently overwritten when generator/EMA checkpoints are loaded.
+    def generator_state_dict(self):
+        return {
+            key: value for key, value in self.state_dict().items()
+            if not key.startswith("guidance_classifier.")
+        }
+
+    def load_generator_state_dict(self, state_dict):
+        generator_state = {
+            key: value for key, value in state_dict.items()
+            if not key.startswith("guidance_classifier.")
+        }
+        missing, unexpected = self.load_state_dict(generator_state, strict=False)
+        missing = [
+            key for key in missing
+            if not key.startswith("guidance_classifier.")
+        ]
+        return missing, unexpected
+
     # ---- Classifier Guidance 相关方法 ----
 
     def pretrain_classifier(self, train_data, train_labels,
-                            epochs=50, batch_size=256, lr=1e-3, device=None):
+                            epochs=100, batch_size=256, lr=1e-3, device=None):
         """
-        用真实数据预训练引导分类器, 然后冻结.
+        在加噪数据上预训练引导分类器, 模拟 flow matching 训练中的 z_t.
 
-        Args:
-            train_data:   (N, seq_length, feature_size) numpy array
-            train_labels: (N,) numpy array
-            epochs: 预训练轮数
-            batch_size: batch size
-            lr: 学习率
-            device: 训练设备
+        不只在干净样本上训练, 否则分类器很容易在真实训练样本上过拟合到高准确率,
+        但对生成器训练时的中间噪声状态给出不可靠梯度。
         """
         if device is None:
             device = next(self.parameters()).device
 
         print(f"\n{'='*50}")
-        print(f"  预训练 Guidance Classifier")
+        print("  预训练 Noise-Aware Guidance Classifier")
         print(f"  数据: {train_data.shape[0]} 样本, {len(np.unique(train_labels))} 类")
         print(f"{'='*50}")
 
@@ -178,9 +202,10 @@ class FM_TS(nn.Module):
             n_channels=self.seq_length,
             n_timepoints=self.feature_size,
             num_classes=self.num_classes,
+            dropout=0.3,
         ).to(device)
 
-        optimizer = torch.optim.AdamW(classifier.parameters(), lr=lr, weight_decay=1e-4)
+        optimizer = torch.optim.AdamW(classifier.parameters(), lr=lr, weight_decay=1e-3)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
         X = torch.from_numpy(train_data).float()
@@ -198,7 +223,14 @@ class FM_TS(nn.Module):
             total_loss, correct, total = 0.0, 0, 0
             for xb, yb in loader:
                 xb, yb = xb.to(device), yb.to(device)
-                logits = classifier(xb)
+
+                # 训练分类器识别 flow matching 中间态: z_t = t*x + (1-t)*noise.
+                # t<0.3 时类别信息太弱, 这里不作为 classifier guidance 的监督目标。
+                t = 0.3 + 0.7 * torch.rand(xb.size(0), 1, 1, device=device)
+                z0 = torch.randn_like(xb)
+                xb_noisy = t * xb + (1.0 - t) * z0
+
+                logits = classifier(xb_noisy)
                 loss = F.cross_entropy(logits, yb)
 
                 optimizer.zero_grad()
@@ -216,28 +248,16 @@ class FM_TS(nn.Module):
                 best_state = {k: v.clone() for k, v in classifier.state_dict().items()}
 
             if epoch % 10 == 0 or epoch == epochs:
-                print(f"  Epoch {epoch:>3d}/{epochs}: loss={total_loss/total:.4f}, acc={acc:.4f}")
+                print(f"  Epoch {epoch:>3d}/{epochs}: loss={total_loss/total:.4f}, noisy_acc={acc:.4f}")
 
-        # Load best and freeze
         classifier.load_state_dict(best_state)
         classifier.eval()
-        for p in classifier.parameters():
-            p.requires_grad = False
+        for param in classifier.parameters():
+            param.requires_grad = False
 
         self.guidance_classifier = classifier
-        print(f"  Classifier 预训练完成, best acc={best_acc:.4f}, 已冻结")
-
-        # 根据准确率自动调整引导强度
-        if best_acc < 0.5:
-            print(f"  ⚠️ 准确率过低 (<50%), 自动关闭 classifier guidance")
-            self.classifier_weight = 0.0
-        elif best_acc < 0.75:
-            recommended = min(self.classifier_weight, 0.02)
-            print(f"  ⚡ 准确率一般 ({best_acc:.0%}), 建议 classifier_weight ≤ {recommended}")
-            self.classifier_weight = recommended
-        else:
-            print(f"  ✅ 准确率良好 ({best_acc:.0%}), classifier_weight={self.classifier_weight}")
-
+        print(f"  Classifier 预训练完成, noisy best acc={best_acc:.4f}, 已冻结")
+        print(f"  classifier_weight={self.classifier_weight}")
         print(f"{'='*50}\n")
         return best_acc
 
@@ -267,6 +287,30 @@ class FM_TS(nn.Module):
     def output(self, x, t, padding_masks=None, label_emb=None):
         output = self.model(x, t, padding_masks=None, label_emb=label_emb)
         return output
+
+    @torch.no_grad()
+    def condition_sensitivity(self, batch_size=16, t=0.5):
+        """Measure how much changing only the label changes the flow field."""
+        if self.label_embedding is None or self.num_classes < 2:
+            return {"pairwise_rmse": 0.0, "relative_rmse": 0.0}
+        device = next(self.parameters()).device
+        z_t = torch.randn(batch_size, self.seq_length, self.feature_size, device=device)
+        t_input = torch.full((batch_size,), t * self.time_scalar, device=device)
+        outputs = []
+        for label in range(self.num_classes):
+            labels = torch.full((batch_size,), label, dtype=torch.long, device=device)
+            outputs.append(self.output(
+                z_t, t_input, label_emb=self.label_embedding(labels)))
+        pairwise = []
+        for i in range(self.num_classes):
+            for j in range(i + 1, self.num_classes):
+                pairwise.append((outputs[i] - outputs[j]).pow(2).mean().sqrt())
+        pairwise_rmse = torch.stack(pairwise).mean()
+        output_rms = torch.stack(outputs).pow(2).mean().sqrt().clamp_min(1e-8)
+        return {
+            "pairwise_rmse": pairwise_rmse.item(),
+            "relative_rmse": (pairwise_rmse / output_rms).item(),
+        }
 
     @torch.no_grad()
     def sample(self, shape, labels=None):
@@ -356,6 +400,39 @@ class FM_TS(nn.Module):
 
         total_loss = fm_loss
 
+        # Correct labels must explain the same noisy state better than wrong labels.
+        if (self.condition_margin_weight > 0 and labels is not None
+                and self.label_embedding is not None and self.num_classes > 1):
+            t_flat = t.reshape(-1)
+            margin_idx = torch.nonzero(
+                t_flat < self.condition_margin_max_t, as_tuple=False).squeeze(1)
+            if margin_idx.numel() > self.condition_margin_batch:
+                perm = torch.randperm(margin_idx.numel(), device=labels.device)
+                margin_idx = margin_idx[perm[:self.condition_margin_batch]]
+            if margin_idx.numel() > 0:
+                z_margin = z_t[margin_idx]
+                target_margin = target[margin_idx]
+                labels_margin = labels[margin_idx]
+                t_margin = t_flat[margin_idx] * self.time_scalar
+                true_out = self.output(
+                    z_margin, t_margin, None,
+                    label_emb=self.label_embedding(labels_margin))
+                offsets = torch.randint(
+                    1, self.num_classes, labels_margin.shape, device=labels.device)
+                wrong_labels = (labels_margin + offsets) % self.num_classes
+                wrong_out = self.output(
+                    z_margin, t_margin, None,
+                    label_emb=self.label_embedding(wrong_labels))
+                true_mse = reduce(
+                    F.mse_loss(true_out, target_margin, reduction="none"),
+                    "b ... -> b", "mean")
+                wrong_mse = reduce(
+                    F.mse_loss(wrong_out, target_margin, reduction="none"),
+                    "b ... -> b", "mean")
+                margin_loss = F.relu(
+                    self.condition_margin + true_mse - wrong_mse).mean()
+                total_loss = total_loss + self.condition_margin_weight * margin_loss
+
         # ---- 频谱一致性损失 ----
         if self.spectral_weight > 0:
             # 重建干净样本
@@ -368,22 +445,15 @@ class FM_TS(nn.Module):
             t_weight = t.squeeze().mean().item()
             total_loss = total_loss + self.spectral_weight * t_weight * spectral_loss
 
-        # ---- Classifier Guidance loss (可选, 与 CFG 共存) ----
+        # ---- Classifier Guidance loss (noise-aware, 全时间步生效) ----
         if self.guidance_classifier is not None and labels is not None and self.classifier_weight > 0:
-            t_flat = t.squeeze()
-            high_t_mask = (t_flat > 0.5)
-            if high_t_mask.any():
-                if not self.spectral_weight > 0:
-                    x_hat = z_t + (1.0 - t) * model_out
-                x_hat_clamped = x_hat.clamp(-1, 1)
-                logits = self.guidance_classifier(x_hat_clamped)
-                probs = F.softmax(logits, dim=-1)
-                confidence = probs.max(dim=-1).values
-                confident_mask = (confidence > 0.5) & high_t_mask
-                if confident_mask.any():
-                    cls_loss = F.cross_entropy(logits[confident_mask], labels[confident_mask])
-                    t_w = t_flat[confident_mask].mean().item()
-                    total_loss = total_loss + self.classifier_weight * t_w * cls_loss
+            if not self.spectral_weight > 0:
+                x_hat = z_t + (1.0 - t) * model_out
+            x_hat_clamped = x_hat.clamp(-1, 1)
+            logits = self.guidance_classifier(x_hat_clamped)
+            cls_loss = F.cross_entropy(logits, labels)
+            t_w = t.squeeze().mean().item()
+            total_loss = total_loss + self.classifier_weight * t_w * cls_loss
 
         return total_loss
 

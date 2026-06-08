@@ -241,16 +241,35 @@ def build_model(model_type, dropout=0.5, device="cpu"):
 
 def train_and_evaluate(train_data, train_labels, test_data, test_labels,
                        device, model_type="dgcnn", epochs=200, batch_size=256,
-                       lr=3e-4, dropout=0.5, verbose=True):
-    X_tr = torch.from_numpy(train_data).float()
-    y_tr = torch.from_numpy(train_labels).long()
+                       lr=3e-4, dropout=0.5, verbose=True, val_ratio=0.15,
+                       split_seed=42, val_data=None, val_labels=None):
+    if val_data is None or val_labels is None:
+        rng = np.random.RandomState(split_seed)
+        fit_idx, val_idx = [], []
+        for c in np.unique(train_labels):
+            class_idx = np.where(train_labels == c)[0]
+            rng.shuffle(class_idx)
+            n_val = min(len(class_idx) - 1, max(1, int(round(len(class_idx) * val_ratio))))
+            val_idx.extend(class_idx[:n_val])
+            fit_idx.extend(class_idx[n_val:])
+        fit_idx, val_idx = np.array(fit_idx), np.array(val_idx)
+        fit_data, fit_labels = train_data[fit_idx], train_labels[fit_idx]
+        val_data, val_labels = train_data[val_idx], train_labels[val_idx]
+    else:
+        fit_data, fit_labels = train_data, train_labels
+
+    X_tr = torch.from_numpy(fit_data).float()
+    y_tr = torch.from_numpy(fit_labels).long()
+    X_val = torch.from_numpy(val_data).float()
+    y_val = torch.from_numpy(val_labels).long()
     X_te = torch.from_numpy(test_data).float()
     y_te = torch.from_numpy(test_labels).long()
 
     loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=batch_size, shuffle=True, drop_last=False)
+    val_loader = DataLoader(TensorDataset(X_val, y_val), batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(TensorDataset(X_te, y_te), batch_size=batch_size, shuffle=False)
 
-    cw = 1.0 / (np.bincount(train_labels, minlength=3).astype(np.float32) + 1e-6)
+    cw = 1.0 / (np.bincount(fit_labels, minlength=3).astype(np.float32) + 1e-6)
     cw = torch.from_numpy(cw / cw.sum() * 3).to(device)
 
     model = build_model(model_type, dropout, device)
@@ -258,7 +277,7 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = nn.CrossEntropyLoss(weight=cw)
 
-    best_acc, best_state, best_ep = 0, None, 0
+    best_acc, best_state, best_ep = -1.0, None, 0
     pbar = tqdm(range(1, epochs + 1), disable=not verbose, desc="Training")
     for ep in pbar:
         model.train()
@@ -273,13 +292,13 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
         model.eval()
         preds, trues = [], []
         with torch.no_grad():
-            for xb, yb in test_loader:
+            for xb, yb in val_loader:
                 preds.append(model(xb.to(device)).argmax(1).cpu().numpy())
                 trues.append(yb.numpy())
-        acc = accuracy_score(np.concatenate(trues), np.concatenate(preds))
-        pbar.set_postfix(acc=f"{acc:.3f}")
-        if acc > best_acc:
-            best_acc, best_ep = acc, ep
+        val_acc = accuracy_score(np.concatenate(trues), np.concatenate(preds))
+        pbar.set_postfix(val_acc=f"{val_acc:.3f}")
+        if val_acc > best_acc:
+            best_acc, best_ep = val_acc, ep
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         if ep - best_ep > 30:
             break
@@ -299,8 +318,8 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
     per_class = {names[c]: float((preds[trues==c]==c).mean()) if (trues==c).sum()>0 else 0.0 for c in range(3)}
 
     return {"accuracy": acc, "f1_macro": f1, "per_class_acc": per_class,
-            "best_epoch": best_ep, "model": model,
-            "train_n": len(train_labels), "test_n": len(test_labels)}
+            "best_epoch": best_ep, "best_val_accuracy": best_acc, "model": model,
+            "train_n": len(fit_labels), "val_n": len(val_labels), "test_n": len(test_labels)}
 
 
 # ============================================================
