@@ -28,6 +28,7 @@ import torch
 import numpy as np
 from scipy import io as sio
 from torch.utils.data import Dataset
+from Utils.Data_utils.group_split import make_recording_group_ids
 
 
 # ================================================================
@@ -129,6 +130,10 @@ class SEEDIVDataset(Dataset):
                 all_samples, all_labels, proportion, seed
             )
 
+        period_mask = self._get_period_mask(
+            split_mode, all_samples.shape[0], all_sessions, all_trials,
+            all_subjects, train_sessions, test_sessions, proportion, seed, period,
+        )
         if period == "train":
             self.samples = train_data
             self.labels = train_labels
@@ -136,6 +141,11 @@ class SEEDIVDataset(Dataset):
             self.samples = test_data
             self.labels = test_labels
 
+        self.sample_sessions = all_sessions[period_mask]
+        self.sample_trials = all_trials[period_mask]
+        self.sample_subjects = all_subjects[period_mask]
+        self.sample_groups = make_recording_group_ids(
+            self.sample_subjects, self.sample_sessions, self.sample_trials)
         self.sample_num = self.samples.shape[0]
 
         print(
@@ -143,6 +153,23 @@ class SEEDIVDataset(Dataset):
             f"shape=({self.samples.shape[1]}, {self.samples.shape[2]}), "
             f"classes={sorted(np.unique(self.labels).tolist())}"
         )
+
+    def _get_period_mask(self, split_mode, n_samples, sessions, trials, subjects,
+                         train_sessions, test_sessions, proportion, seed, period):
+        if split_mode == "session":
+            selected = train_sessions if period == "train" else test_sessions
+            return np.isin(sessions, list(selected))
+        if split_mode == "trial":
+            selected = self.train_trials if period == "train" else self.test_trials
+            return np.isin(trials, list(selected))
+        if split_mode == "subject":
+            return subjects != self.test_subject if period == "train" else subjects == self.test_subject
+
+        rng = np.random.RandomState(seed)
+        indices = rng.permutation(n_samples)
+        train_size = int(np.ceil(n_samples * proportion))
+        selected = indices[:train_size] if period == "train" else indices[train_size:]
+        return selected
 
     # ================================================================
     #  DE 特征加载

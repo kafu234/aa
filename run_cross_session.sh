@@ -2,6 +2,7 @@
 # ============================================================
 # 跨 Session 实验: 所有被试 session 1+2 训练, session 3 测试
 # 流程: 条件训练(session1+2) → 无标签微调(session3) → 生成 → 评估
+# 注意: 该流程显式使用无标签测试域数据，属于 transductive adaptation。
 # ============================================================
 
 DATA_ROOT="/root/autodl-tmp/ExtractedFeatures"
@@ -38,6 +39,7 @@ python train_seed.py --config $CONFIG --gpu $GPU \
     --checkpoint ${BASE_DIR}/checkpoint-best.pt \
     --finetune --max_epochs $FT_EPOCHS \
     --unlabeled_finetune --use_test_period \
+    --allow_transductive_test_adaptation \
     --results_dir $ADAPT_DIR
 
 # ---- 3. 生成 ----

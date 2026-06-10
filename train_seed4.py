@@ -27,13 +27,14 @@ from tqdm.auto import tqdm
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.nn.utils import clip_grad_norm_
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from Models.interpretable_diffusion.FMTS import FM_TS
 from Models.interpretable_diffusion.model_utils import unnormalize_to_zero_to_one
 from Utils.Data_utils.seed4_dataset import SEEDIVDataset as SEEDDataset, print_dataset_stats, NUM_CLASSES, LABEL_NAMES
+from Utils.Data_utils.group_split import group_holdout, stratified_group_holdout
 
 
 class SimpleEMA:
@@ -86,6 +87,68 @@ class SEEDTrainer:
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.step = 0
         self.best_loss = float("inf")
+
+        # === FIX #1: checkpoint 选择改用 EMA 影子在「真·留出验证集」上的 FM loss ===
+        self.best_val = float("inf")
+        self.val_ema = None
+        self._use_labels = (getattr(args, "conditional", False)
+                            and not getattr(args, "unlabeled_finetune", False))
+        ds = self.train_loader.dataset
+        x_all = np.asarray(ds.samples, dtype=np.float32)
+        y_all = (np.asarray(ds.labels).astype(np.int64)
+                 if getattr(ds, "labels", None) is not None else None)
+        validation_level = getattr(args, "validation_level", "trial")
+        if validation_level == "subject" and not getattr(args, "unlabeled_finetune", False):
+            groups = np.asarray(ds.sample_subjects, dtype=np.int64)
+            train_idx, val_idx = group_holdout(
+                groups, val_ratio=args.validation_ratio, seed=args.seed)
+        else:
+            groups = np.asarray(ds.sample_groups, dtype=np.int64)
+            if getattr(args, "unlabeled_finetune", False):
+                train_idx, val_idx = group_holdout(
+                    groups, val_ratio=args.validation_ratio, seed=args.seed)
+            else:
+                train_idx, val_idx = stratified_group_holdout(
+                    y_all, groups, val_ratio=args.validation_ratio, seed=args.seed)
+        n_val = len(val_idx)
+
+        self.val_x = torch.from_numpy(x_all[val_idx]).float().to(self.device)
+        self.val_y = (torch.from_numpy(y_all[val_idx]).long().to(self.device)
+                      if (self._use_labels and y_all is not None) else None)
+
+        self._train_samples = x_all[train_idx]
+        self._train_labels = y_all[train_idx] if y_all is not None else None
+        bs = self.train_loader.batch_size
+        nw = getattr(self.train_loader, "num_workers", 0)
+        pm = getattr(self.train_loader, "pin_memory", False)
+        self.train_loader = DataLoader(
+            Subset(ds, train_idx.tolist()), batch_size=bs, shuffle=True,
+            num_workers=nw, pin_memory=pm, drop_last=(len(train_idx) >= bs))
+        print(f"[Trainer] {validation_level} 级留出验证集 n_val={n_val}, "
+              f"groups={len(np.unique(groups[val_idx]))} (已从训练中剔除), "
+              f"训练样本={len(train_idx)}")
+
+    @torch.no_grad()
+    def _eval_ema_fm_loss(self, n_draws=4):
+        """在固定验证批上用 EMA 影子算纯 FM MSE (确定性, 跨 step 可比)。"""
+        shadow = self.ema.shadow
+        shadow.eval()
+        x1 = self.val_x
+        label_emb = None
+        if self.val_y is not None and shadow.label_embedding is not None:
+            label_emb = shadow.label_embedding(self.val_y)
+        gen = torch.Generator(device=self.device).manual_seed(2024)
+        total = 0.0
+        for _ in range(n_draws):
+            z0 = torch.randn(x1.shape, generator=gen, device=self.device)
+            t = torch.rand(x1.shape[0], 1, 1, generator=gen, device=self.device)
+            z_t = t * x1 + (1.0 - t) * z0
+            target = x1 - z0
+            out = shadow.output(
+                z_t, t.squeeze(-1).squeeze(-1) * shadow.time_scalar,
+                None, label_emb=label_emb)
+            total += F.mse_loss(out, target).item()
+        return total / n_draws
 
     def _infinite_loader(self):
         while True:
@@ -140,9 +203,16 @@ class SEEDTrainer:
                 pbar.update(1)
 
                 if self.step % self.save_cycle == 0:
-                    if total_loss < self.best_loss:
-                        self.best_loss = total_loss
+                    # === FIX #1: 用 EMA 影子在固定验证批上的 FM loss 选 best ===
+                    val = self._eval_ema_fm_loss()
+                    self.val_ema = val if self.val_ema is None else \
+                        0.6 * self.val_ema + 0.4 * val
+                    self.best_loss = total_loss  # 仅作日志记录
+                    if self.val_ema < self.best_val:
+                        self.best_val = self.val_ema
                         self.save("checkpoint-best.pt")
+                    pbar.set_postfix(val_fm=f"{self.val_ema:.5f}",
+                                     best=f"{self.best_val:.5f}")
 
         self.save("checkpoint-last.pt")
         best_path = self.results_dir / "checkpoint-best.pt"
@@ -157,7 +227,11 @@ class SEEDTrainer:
         torch.save({
             "step": self.step, "model": self.model.generator_state_dict(),
             "ema": self.ema.shadow.generator_state_dict(), "optimizer": self.optimizer.state_dict(),
-            "best_loss": self.best_loss,
+            "best_loss": self.best_loss, "best_val": self.best_val,
+            # === FIX #2: 存训练期的生成相关配置 (CFG 是否启用由 cfg_dropout 决定) ===
+            "cfg_dropout": float(self.model.cfg_dropout),
+            "guidance_scale": float(self.model.guidance_scale),
+            "num_classes": int(self.model.num_classes),
         }, path)
 
     def load(self, path):
@@ -170,6 +244,13 @@ class SEEDTrainer:
             print(f"  Warning: optimizer state mismatch, using fresh optimizer")
         self.step = data["step"]
         self.best_loss = data.get("best_loss", float("inf"))
+        self.best_val = data.get("best_val", float("inf"))
+        # === FIX #2: 用 checkpoint 里训练期的 cfg_dropout 覆盖当前模型 ===
+        if "cfg_dropout" in data:
+            for m in (self.model, self.ema.shadow):
+                m.cfg_dropout = data["cfg_dropout"]
+            print(f"  Restored training-time cfg_dropout={data['cfg_dropout']} "
+                  f"(决定采样时 CFG 是否启用; guidance_scale 仍由命令行控制)")
         print(f"Loaded checkpoint from {path}, step={self.step}")
         if unexpected:
             print(f"  Ignored {len(unexpected)} unexpected keys (e.g. guidance_classifier)")
@@ -177,9 +258,11 @@ class SEEDTrainer:
             print(f"  Missing {len(missing)} keys (new modules will be randomly initialized)")
 
     def _sample_anchor_batch(self, batch_labels, batch_size):
-        dataset = self.train_loader.dataset
-        real_samples = np.asarray(dataset.samples)
-        real_labels = np.asarray(dataset.labels).astype(int)
+        # FIX #1: 只用训练部分做锚点 (排除留出验证样本)
+        real_samples = self._train_samples
+        real_labels = (self._train_labels.astype(int)
+                       if self._train_labels is not None
+                       else np.zeros(real_samples.shape[0], dtype=int))
         if real_samples.shape[0] == 0:
             raise ValueError("Cannot use anchored sampling: training dataset is empty")
 
@@ -281,14 +364,30 @@ def main():
     parser.add_argument("--test_subject", type=int, default=None)
     parser.add_argument("--train_trials", type=str, default=None)
     parser.add_argument("--test_trials", type=str, default=None)
+    parser.add_argument("--validation_level", choices=["trial", "subject"], default="trial",
+                        help="checkpoint validation grouping; use subject for source-domain LOSO training")
+    parser.add_argument("--validation_ratio", type=float, default=0.15)
+    parser.add_argument("--skip_generation", action="store_true",
+                        help="train/checkpoint only; do not generate samples")
+    parser.add_argument("--anchor_bundle", type=str, default=None,
+                        help="pseudo-labeled target anchors (.npz); labels must not be target ground truth")
     # === 改动2: 新增参数 ===
     parser.add_argument("--unlabeled_finetune", action="store_true",
                         help="无标签微调: 加载条件模型但训练时不传标签, "
                              "用于在测试数据上适应分布")
     parser.add_argument("--use_test_period", action="store_true",
-                        help="加载测试集数据 (配合 --unlabeled_finetune 使用, "
-                             "跨session时加载session3, 跨subject时加载留出被试)")
+                        help="加载测试集数据，仅用于显式声明的传导式域适配")
+    parser.add_argument("--allow_transductive_test_adaptation", action="store_true",
+                        help="明确允许使用无标签测试数据适配；普通泛化实验禁止启用")
     args = parser.parse_args()
+
+    if args.use_test_period:
+        if not args.unlabeled_finetune or not args.allow_transductive_test_adaptation:
+            parser.error(
+                "--use_test_period 会使用测试域数据，必须同时指定 "
+                "--unlabeled_finetune 和 --allow_transductive_test_adaptation")
+        if args.checkpoint is None or not args.finetune:
+            parser.error("测试域适配必须通过 --checkpoint 加载模型并指定 --finetune")
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -371,25 +470,37 @@ def main():
         args.results_dir = f"./results/{ds_cfg.get('name', 'SEED')}"
 
     trainer = SEEDTrainer(model, train_loader, config, args)
+    if args.anchor_bundle is not None:
+        anchor_bundle = np.load(args.anchor_bundle)
+        trainer._train_samples = np.clip(
+            anchor_bundle["data"] / 5.0, -1.0, 1.0).astype(np.float32)
+        trainer._train_labels = anchor_bundle["labels"].astype(np.int64)
+        missing_classes = sorted(set(range(model.num_classes)) - set(np.unique(trainer._train_labels)))
+        if missing_classes:
+            raise ValueError(f"anchor bundle is missing pseudo-label classes: {missing_classes}")
+        print(f"[Pseudo anchors] loaded {len(trainer._train_labels)} samples from {args.anchor_bundle}")
 
     if args.checkpoint is not None:
         trainer.load(args.checkpoint)
         if args.finetune:
             trainer.step = 0
             trainer.best_loss = float("inf")
+            trainer.best_val = float("inf")   # FIX #1
+            trainer.val_ema = None
             print(f"[Finetune] 重置训练步数: step=0, max_epochs={trainer.max_epochs}")
 
     # === Guidance Classifier: 必须在 checkpoint 加载之后, 避免被覆盖 ===
-    if args.conditional and args.classifier_weight > 0 and not args.unlabeled_finetune:
+    # FIX #4: sample_only 时采样路径用 CFG, 不需要 guidance classifier。
+    if (args.conditional and args.classifier_weight > 0
+            and not args.unlabeled_finetune and not args.sample_only):
         os.makedirs(args.results_dir, exist_ok=True)
-        classifier_path = os.path.join(args.results_dir, "guidance_classifier.pt")
+        classifier_path = os.path.join(args.results_dir, "guidance_classifier_fit_only.pt")
         if os.path.exists(classifier_path):
             model.load_classifier(classifier_path, device=device)
         else:
-            real_data = train_dataset.samples
-            real_labels = train_dataset.labels
             model.pretrain_classifier(
-                real_data, real_labels, epochs=args.cls_epochs, device=device)
+                trainer._train_samples, trainer._train_labels,
+                epochs=args.cls_epochs, device=device)
             model.save_classifier(classifier_path)
 
     if not args.sample_only:
@@ -404,6 +515,10 @@ def main():
         sensitivity = trainer.ema.shadow.condition_sensitivity()
         print(f"[Condition sensitivity] pairwise_rmse={sensitivity['pairwise_rmse']:.6f}, "
               f"relative_rmse={sensitivity['relative_rmse']:.4f}")
+
+    if args.skip_generation:
+        print("[Generate] skipped by --skip_generation")
+        return
 
     # 生成样本
     num_gen = args.num_samples if args.num_samples > 0 else len(train_dataset)

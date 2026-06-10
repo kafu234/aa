@@ -36,6 +36,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score, f1_score
 from tqdm.auto import tqdm
+from Utils.Data_utils.group_split import stratified_group_holdout
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -193,7 +194,8 @@ class DETransformer(nn.Module):
 # ============================================================
 
 def load_de_data(data_root, seed=42, split_mode="trial", subject=None,
-                 train_trials=None, test_trials=None, test_subject=None):
+                 train_trials=None, test_trials=None, test_subject=None,
+                 return_groups=False, return_subjects=False):
     from Utils.Data_utils.seed_dataset import SEEDDataset
     subjects = [subject] if (subject is not None and split_mode != "subject") else None
     common = dict(
@@ -211,7 +213,12 @@ def load_de_data(data_root, seed=42, split_mode="trial", subject=None,
     print(f"[{subj_str}] Train: {ds_train.samples.shape}, Test: {ds_test.samples.shape}")
     print(f"  Train labels: {dict(zip(*np.unique(ds_train.labels, return_counts=True)))}")
     print(f"  Test  labels: {dict(zip(*np.unique(ds_test.labels, return_counts=True)))}")
-    return ds_train.samples, ds_train.labels, ds_test.samples, ds_test.labels
+    result = (ds_train.samples, ds_train.labels, ds_test.samples, ds_test.labels)
+    if return_groups:
+        result += (ds_train.sample_groups,)
+    if return_subjects:
+        result += (ds_train.sample_subjects,)
+    return result
 
 
 def load_synthetic_de(path):
@@ -242,17 +249,22 @@ def build_model(model_type, dropout=0.5, device="cpu"):
 def train_and_evaluate(train_data, train_labels, test_data, test_labels,
                        device, model_type="dgcnn", epochs=200, batch_size=256,
                        lr=3e-4, dropout=0.5, verbose=True, val_ratio=0.15,
-                       split_seed=42, val_data=None, val_labels=None):
+                       split_seed=42, val_data=None, val_labels=None,
+                       train_groups=None, val_interval=1, patience=30):
     if val_data is None or val_labels is None:
-        rng = np.random.RandomState(split_seed)
-        fit_idx, val_idx = [], []
-        for c in np.unique(train_labels):
-            class_idx = np.where(train_labels == c)[0]
-            rng.shuffle(class_idx)
-            n_val = min(len(class_idx) - 1, max(1, int(round(len(class_idx) * val_ratio))))
-            val_idx.extend(class_idx[:n_val])
-            fit_idx.extend(class_idx[n_val:])
-        fit_idx, val_idx = np.array(fit_idx), np.array(val_idx)
+        if train_groups is not None:
+            fit_idx, val_idx = stratified_group_holdout(
+                train_labels, train_groups, val_ratio=val_ratio, seed=split_seed)
+        else:
+            rng = np.random.RandomState(split_seed)
+            fit_idx, val_idx = [], []
+            for c in np.unique(train_labels):
+                class_idx = np.where(train_labels == c)[0]
+                rng.shuffle(class_idx)
+                n_val = min(len(class_idx) - 1, max(1, int(round(len(class_idx) * val_ratio))))
+                val_idx.extend(class_idx[:n_val])
+                fit_idx.extend(class_idx[n_val:])
+            fit_idx, val_idx = np.array(fit_idx), np.array(val_idx)
         fit_data, fit_labels = train_data[fit_idx], train_labels[fit_idx]
         val_data, val_labels = train_data[val_idx], train_labels[val_idx]
     else:
@@ -289,6 +301,8 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
             optimizer.step()
         scheduler.step()
 
+        if ep % val_interval != 0 and ep != epochs:
+            continue
         model.eval()
         preds, trues = [], []
         with torch.no_grad():
@@ -300,7 +314,7 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
         if val_acc > best_acc:
             best_acc, best_ep = val_acc, ep
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-        if ep - best_ep > 30:
+        if ep - best_ep > patience:
             break
 
     model.load_state_dict(best_state)
@@ -380,9 +394,9 @@ def run_baseline(args, device):
     for subj in subjects:
         print(f"\n--- 被试 {subj} ---")
         try:
-            tr_d, tr_l, te_d, te_l = load_de_data(
+            tr_d, tr_l, te_d, te_l, tr_groups = load_de_data(
                 args.data_root, args.seed, args.split_mode, subj,
-                train_trials, test_trials, None)
+                train_trials, test_trials, None, return_groups=True)
         except Exception as e:
             print(f"  加载失败: {e}"); continue
 
@@ -391,7 +405,7 @@ def run_baseline(args, device):
             torch.manual_seed(args.seed + r); np.random.seed(args.seed + r)
             res = train_and_evaluate(tr_d, tr_l, te_d, te_l, device,
                 model_type=args.model, epochs=args.epochs, lr=args.lr,
-                dropout=args.dropout, verbose=False)
+                dropout=args.dropout, verbose=False, train_groups=tr_groups)
             accs.append(res["accuracy"]); f1s.append(res["f1_macro"])
         m_acc, m_f1 = np.mean(accs), np.mean(f1s)
         all_accs.append(m_acc); all_f1s.append(m_f1)
@@ -452,16 +466,16 @@ def main():
 
     # ---- Real only 模式 ----
     if args.real_only:
-        tr_d, tr_l, te_d, te_l = load_de_data(
+        tr_d, tr_l, te_d, te_l, tr_groups = load_de_data(
             args.data_root, args.seed, args.split_mode, args.subject,
-            train_trials, test_trials, args.test_subject)
+            train_trials, test_trials, args.test_subject, return_groups=True)
         print(f"\n纯真实数据评估 ({args.model}):")
         accs, f1s = [], []
         for r in range(args.n_runs):
             torch.manual_seed(args.seed + r); np.random.seed(args.seed + r)
             res = train_and_evaluate(tr_d, tr_l, te_d, te_l, device,
                 model_type=args.model, epochs=args.epochs, lr=args.lr,
-                dropout=args.dropout)
+                dropout=args.dropout, train_groups=tr_groups)
             accs.append(res["accuracy"]); f1s.append(res["f1_macro"])
             print(f"  Run {r+1}: acc={res['accuracy']:.4f}, f1={res['f1_macro']:.4f}, "
                   f"per_class={res['per_class_acc']}")
@@ -471,28 +485,41 @@ def main():
 
     # ---- 需要合成数据 ----
     assert args.synthetic_path, "需要 --synthetic_path 或使用 --real_only"
-    tr_d, tr_l, te_d, te_l = load_de_data(
+    tr_d, tr_l, te_d, te_l, tr_groups = load_de_data(
         args.data_root, args.seed, args.split_mode, args.subject,
-        train_trials, test_trials, args.test_subject)
+        train_trials, test_trials, args.test_subject, return_groups=True)
     syn_data, syn_labels = load_synthetic_de(args.synthetic_path)
 
     if args.mode == "diagnose":
         print(f"\n训练 baseline {args.model}...")
         torch.manual_seed(args.seed)
         res = train_and_evaluate(tr_d, tr_l, te_d, te_l, device,
-            model_type=args.model, epochs=args.epochs, lr=args.lr, dropout=args.dropout)
+            model_type=args.model, epochs=args.epochs, lr=args.lr, dropout=args.dropout,
+            train_groups=tr_groups)
         print(f"Baseline: acc={res['accuracy']:.4f}, f1={res['f1_macro']:.4f}")
         diagnose(res["model"], syn_data, syn_labels, device)
 
     elif args.mode == "compare":
-        n_target = int(len(syn_labels) * args.syn_ratio)
-        idx = np.random.choice(len(syn_labels), min(n_target, len(syn_labels)), replace=False)
-        syn_sub, syn_lab_sub = syn_data[idx], syn_labels[idx]
-        print(f"\n使用 {len(syn_lab_sub)} 合成样本 (syn_ratio={args.syn_ratio})")
+        # === FIX: 验证集只从【真实】训练数据划出, 且在加入合成之前划好 ===
+        # 原版先把合成拼进 train_data 再切 val, 导致合成漏进验证集、模型选择被污染。
+        # 两个条件共用同一「仅真实」val + 同一真实 fit 基底, A/B 才公平。
+        real_fit_idx, real_val_idx = stratified_group_holdout(
+            tr_l, tr_groups, val_ratio=0.15, seed=args.seed)
+        real_fit_d, real_fit_l = tr_d[real_fit_idx], tr_l[real_fit_idx]
+        real_val_d, real_val_l = tr_d[real_val_idx], tr_l[real_val_idx]
+
+        # === FIX: syn_ratio 现在表示「合成样本数 = syn_ratio × 真实 fit 样本数」===
+        n_syn = int(len(real_fit_l) * args.syn_ratio)
+        rng_syn = np.random.RandomState(args.seed)
+        syn_pick = rng_syn.choice(len(syn_labels), min(n_syn, len(syn_labels)), replace=False)
+        syn_sub, syn_lab_sub = syn_data[syn_pick], syn_labels[syn_pick]
+        print(f"\n真实 fit={len(real_fit_l)}, 完整 trial 真实 val={len(real_val_l)}, "
+              f"合成={len(syn_lab_sub)} (syn_ratio={args.syn_ratio} ×真实fit)")
 
         for mode_name, tr_data, tr_labels in [
-            ("无生成数据", tr_d, tr_l),
-            ("有生成数据", np.concatenate([tr_d, syn_sub]), np.concatenate([tr_l, syn_lab_sub])),
+            ("无生成数据", real_fit_d, real_fit_l),
+            ("有生成数据", np.concatenate([real_fit_d, syn_sub]),
+                           np.concatenate([real_fit_l, syn_lab_sub])),
         ]:
             print(f"\n{'='*50}\n  {mode_name} (train={len(tr_labels)}, model={args.model})\n{'='*50}")
             accs, f1s = [], []
@@ -500,7 +527,8 @@ def main():
                 torch.manual_seed(args.seed + r); np.random.seed(args.seed + r)
                 res = train_and_evaluate(tr_data, tr_labels, te_d, te_l, device,
                     model_type=args.model, epochs=args.epochs, lr=args.lr,
-                    dropout=args.dropout, verbose=False)
+                    dropout=args.dropout, verbose=False,
+                    val_data=real_val_d, val_labels=real_val_l)  # 仅真实 val, 不再泄漏
                 accs.append(res["accuracy"]); f1s.append(res["f1_macro"])
                 print(f"  Run {r+1}: acc={res['accuracy']:.4f}, f1={res['f1_macro']:.4f}, "
                       f"per_class={res['per_class_acc']}")
