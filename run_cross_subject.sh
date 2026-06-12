@@ -9,16 +9,26 @@ GPU=${GPU:-0}
 SOURCE_EPOCHS=${SOURCE_EPOCHS:-10000}
 ADAPT_EPOCHS=${ADAPT_EPOCHS:-1000}
 SCORER_EPOCHS=${SCORER_EPOCHS:-200}
+SCORER_BATCH_SIZE=${SCORER_BATCH_SIZE:-8192}
+SCORER_LABEL_SMOOTHING=${SCORER_LABEL_SMOOTHING:-0.0}
+SCORER_TEMPERATURE_CALIBRATION=${SCORER_TEMPERATURE_CALIBRATION:-1}
+SCORER_CALIBRATION_ARG=""
+if [ "${SCORER_TEMPERATURE_CALIBRATION}" = "1" ]; then
+    SCORER_CALIBRATION_ARG="--temperature_calibration"
+fi
 SCORE_RUNS=${SCORE_RUNS:-3}
 EVAL_EPOCHS=${EVAL_EPOCHS:-200}
 N_RUNS=${N_RUNS:-5}
-EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-1024}
-EVAL_VAL_INTERVAL=${EVAL_VAL_INTERVAL:-5}
-EVAL_PATIENCE=${EVAL_PATIENCE:-20}
+EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-4096}
 PSEUDO_THRESHOLD=${PSEUDO_THRESHOLD:-0.8}
 PSEUDO_MIN_AGREEMENT=${PSEUDO_MIN_AGREEMENT:-0.67}
 PSEUDO_MIN_PER_CLASS=${PSEUDO_MIN_PER_CLASS:-100}
 PSEUDO_MAX_PER_CLASS=${PSEUDO_MAX_PER_CLASS:-1000}
+PSEUDO_BALANCE_CLASSES=${PSEUDO_BALANCE_CLASSES:-1}
+PSEUDO_BALANCE_ARG=""
+if [ "${PSEUDO_BALANCE_CLASSES}" = "1" ]; then
+    PSEUDO_BALANCE_ARG="--balance_classes"
+fi
 PSEUDO_RATIO=${PSEUDO_RATIO:-0.1}
 SYN_RATIO=${SYN_RATIO:-0.10}
 NUM_SYNTHETIC=${NUM_SYNTHETIC:-30000}
@@ -48,6 +58,8 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 echo "Run started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "Log file: ${LOG_FILE}"
 echo "NUM_SYNTHETIC=${NUM_SYNTHETIC}; PSEUDO_RATIO=${PSEUDO_RATIO}; SYN_RATIO=${SYN_RATIO}"
+echo "SCORER_BATCH_SIZE=${SCORER_BATCH_SIZE}; SCORER_LABEL_SMOOTHING=${SCORER_LABEL_SMOOTHING}; SCORER_TEMPERATURE_CALIBRATION=${SCORER_TEMPERATURE_CALIBRATION}; EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE}"
+echo "Generator and final evaluation use all source subjects; scorer calibration is controlled separately"
 
 for SUBJ in $SUBJECTS; do
     echo "============================================================"
@@ -62,7 +74,7 @@ for SUBJ in $SUBJECTS; do
         python ${TRAIN_SCRIPT} --config ${CONFIG} --gpu ${GPU} \
             --conditional --classifier_weight ${CLASSIFIER_WEIGHT} \
             --split_mode subject --test_subject ${SUBJ} \
-            --validation_level subject --validation_ratio 0.05 \
+            --no_validation \
             --max_epochs ${SOURCE_EPOCHS} \
             --skip_generation --results_dir ${BASE_DIR}
     fi
@@ -71,15 +83,20 @@ for SUBJ in $SUBJECTS; do
         python pseudo_label_target.py --dataset ${DATASET} \
             --data_root ${DATA_ROOT} --test_subject ${SUBJ} \
             --score_runs ${SCORE_RUNS} --epochs ${SCORER_EPOCHS} \
+            --batch_size ${SCORER_BATCH_SIZE} \
+            --label_smoothing ${SCORER_LABEL_SMOOTHING} \
+            ${SCORER_CALIBRATION_ARG} \
             --threshold ${PSEUDO_THRESHOLD} --min_agreement ${PSEUDO_MIN_AGREEMENT} \
             --min_per_class ${PSEUDO_MIN_PER_CLASS} \
             --max_per_class ${PSEUDO_MAX_PER_CLASS} \
+            ${PSEUDO_BALANCE_ARG} \
             --gpu ${GPU} --output ${PSEUDO_FILE}
     fi
 
     if [ "$RUN_ADAPT" = "1" ]; then
         python ${TRAIN_SCRIPT} --config ${CONFIG} --gpu ${GPU} \
             --conditional --split_mode subject --test_subject ${SUBJ} \
+            --no_validation \
             --checkpoint ${BASE_DIR}/checkpoint-best.pt \
             --finetune --max_epochs ${ADAPT_EPOCHS} \
             --unlabeled_finetune --use_test_period \
@@ -102,6 +119,5 @@ for SUBJ in $SUBJECTS; do
         --synthetic_path ${GEN_FILE} \
         --pseudo_ratio ${PSEUDO_RATIO} --syn_ratio ${SYN_RATIO} \
         --epochs ${EVAL_EPOCHS} --n_runs ${N_RUNS} \
-        --batch_size ${EVAL_BATCH_SIZE} --val_interval ${EVAL_VAL_INTERVAL} \
-        --patience ${EVAL_PATIENCE} --gpu ${GPU}
+        --batch_size ${EVAL_BATCH_SIZE} --gpu ${GPU}
 done

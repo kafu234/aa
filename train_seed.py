@@ -104,6 +104,13 @@ class SEEDTrainer:
         x_all = np.asarray(ds.samples, dtype=np.float32)
         y_all = (np.asarray(ds.labels).astype(np.int64)
                  if getattr(ds, "labels", None) is not None else None)
+        if getattr(args, "no_validation", False):
+            self.val_x = None
+            self.val_y = None
+            self._train_samples = x_all
+            self._train_labels = y_all
+            print(f"[Trainer] 无验证集，固定训练步数，训练样本={len(x_all)}")
+            return
         validation_level = getattr(args, "validation_level", "trial")
         if validation_level == "subject" and not getattr(args, "unlabeled_finetune", False):
             groups = np.asarray(ds.sample_subjects, dtype=np.int64)
@@ -216,6 +223,10 @@ class SEEDTrainer:
                 pbar.update(1)
 
                 if self.step % self.save_cycle == 0:
+                    if getattr(self.args, "no_validation", False):
+                        self.best_loss = total_loss
+                        pbar.set_postfix(train_loss=f"{total_loss:.5f}")
+                        continue
                     # === FIX #1: 用 EMA 影子在固定验证批上的 FM loss 选 best ===
                     val = self._eval_ema_fm_loss()
                     # 轻度平滑, 抑制单点抖动
@@ -386,6 +397,8 @@ def main():
     parser.add_argument("--validation_level", choices=["trial", "subject"], default="trial",
                         help="checkpoint validation grouping; use subject for source-domain LOSO training")
     parser.add_argument("--validation_ratio", type=float, default=0.15)
+    parser.add_argument("--no_validation", action="store_true",
+                        help="use all available training data and fixed epochs")
     parser.add_argument("--skip_generation", action="store_true",
                         help="train/checkpoint only; do not generate samples")
     parser.add_argument("--anchor_bundle", type=str, default=None,
@@ -514,7 +527,8 @@ def main():
     if (args.conditional and args.classifier_weight > 0
             and not args.unlabeled_finetune and not args.sample_only):
         os.makedirs(args.results_dir, exist_ok=True)
-        classifier_path = os.path.join(args.results_dir, "guidance_classifier_fit_only.pt")
+        classifier_name = "guidance_classifier_all_source.pt" if args.no_validation else "guidance_classifier_fit_only.pt"
+        classifier_path = os.path.join(args.results_dir, classifier_name)
         if os.path.exists(classifier_path):
             model.load_classifier(classifier_path, device=device)
         else:
@@ -525,11 +539,11 @@ def main():
 
     if not args.sample_only:
         trainer.train()
-        # 加载最佳 checkpoint 用于生成 (训练结束时的模型不一定是最优的)
-        best_ckpt = os.path.join(args.results_dir, "checkpoint-best.pt")
-        if os.path.exists(best_ckpt):
-            print(f"[Generate] 加载最佳 checkpoint: {best_ckpt}")
-            trainer.load(best_ckpt)
+        checkpoint_name = "checkpoint-last.pt" if args.no_validation else "checkpoint-best.pt"
+        generation_ckpt = os.path.join(args.results_dir, checkpoint_name)
+        if os.path.exists(generation_ckpt):
+            print(f"[Generate] 加载 checkpoint: {generation_ckpt}")
+            trainer.load(generation_ckpt)
 
     if args.conditional:
         sensitivity = trainer.ema.shadow.condition_sensitivity()

@@ -257,8 +257,12 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
                        device, model_type="dgcnn", epochs=200, batch_size=256,
                        lr=3e-4, dropout=0.5, verbose=True, val_ratio=0.15,
                        split_seed=42, val_data=None, val_labels=None,
-                       train_groups=None, val_interval=1, patience=30):
-    if val_data is None or val_labels is None:
+                       train_groups=None, val_interval=1, patience=30, use_validation=True,
+                       label_smoothing=0.0):
+    if not use_validation:
+        fit_data, fit_labels = train_data, train_labels
+        val_data, val_labels = None, None
+    elif val_data is None or val_labels is None:
         if train_groups is not None:
             fit_idx, val_idx = stratified_group_holdout(
                 train_labels, train_groups, val_ratio=val_ratio, seed=split_seed)
@@ -279,13 +283,13 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
 
     X_tr = torch.from_numpy(fit_data).float()
     y_tr = torch.from_numpy(fit_labels).long()
-    X_val = torch.from_numpy(val_data).float()
-    y_val = torch.from_numpy(val_labels).long()
+    X_val = torch.from_numpy(val_data).float() if use_validation else None
+    y_val = torch.from_numpy(val_labels).long() if use_validation else None
     X_te = torch.from_numpy(test_data).float()
     y_te = torch.from_numpy(test_labels).long()
 
     loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=batch_size, shuffle=True, drop_last=False)
-    val_loader = DataLoader(TensorDataset(X_val, y_val), batch_size=batch_size, shuffle=False)
+    val_loader = DataLoader(TensorDataset(X_val, y_val), batch_size=batch_size, shuffle=False) if use_validation else None
     test_loader = DataLoader(TensorDataset(X_te, y_te), batch_size=batch_size, shuffle=False)
 
     cw = 1.0 / (np.bincount(fit_labels, minlength=NUM_CLASSES).astype(np.float32) + 1e-6)
@@ -294,7 +298,7 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
     model = build_model(model_type, dropout, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-    criterion = nn.CrossEntropyLoss(weight=cw)
+    criterion = nn.CrossEntropyLoss(weight=cw, label_smoothing=label_smoothing)
 
     best_acc, best_state, best_ep = -1.0, None, 0
     pbar = tqdm(range(1, epochs + 1), disable=not verbose, desc="Training")
@@ -308,6 +312,8 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
             optimizer.step()
         scheduler.step()
 
+        if not use_validation:
+            continue
         if ep % val_interval != 0 and ep != epochs:
             continue
         model.eval()
@@ -324,6 +330,10 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
         if ep - best_ep > patience:
             break
 
+    if not use_validation:
+        best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        best_ep = epochs
+        best_acc = float("nan")
     model.load_state_dict(best_state)
     model.to(device).eval()
     preds, trues = [], []
@@ -342,7 +352,7 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
 
     return {"accuracy": acc, "f1_macro": f1, "per_class_acc": per_class,
             "best_epoch": best_ep, "best_val_accuracy": best_acc, "model": model,
-            "train_n": len(fit_labels), "val_n": len(val_labels), "test_n": len(test_labels)}
+            "train_n": len(fit_labels), "val_n": 0 if val_labels is None else len(val_labels), "test_n": len(test_labels)}
 
 
 # ============================================================
