@@ -161,37 +161,34 @@ def main():
         run_seed = args.seed + run
         torch.manual_seed(run_seed)
         np.random.seed(run_seed)
-        if args.temperature_calibration:
-            calibration_subject = source_subject_ids[run % len(source_subject_ids)]
-            calibration_mask = source_subjects == calibration_subject
-            scorer_train_x = source_x[~calibration_mask]
-            scorer_train_y = source_y[~calibration_mask]
-            calibration_x = source_x[calibration_mask]
-            calibration_y = source_y[calibration_mask]
-            print(f"  scorer {run + 1}: train={len(scorer_train_y)} samples, "
-                  f"calibration_subject={calibration_subject}, calibration={len(calibration_y)} samples")
-        else:
-            scorer_train_x, scorer_train_y = source_fit_x, source_fit_y
-            calibration_x = calibration_y = None
+        validation_subject = source_subject_ids[run % len(source_subject_ids)]
+        validation_mask = source_subjects == validation_subject
+        scorer_train_x = source_x[~validation_mask]
+        scorer_train_y = source_y[~validation_mask]
+        validation_x = source_x[validation_mask]
+        validation_y = source_y[validation_mask]
+        print(f"  scorer {run + 1}: train={len(scorer_train_y)} samples, "
+              f"validation_subject={validation_subject}, validation={len(validation_y)} samples")
         print(f"  starting scorer {run + 1}/{args.score_runs}: epochs={args.epochs}, batch={args.batch_size}", flush=True)
         result = train_and_evaluate(
             scorer_train_x, scorer_train_y, target_x, dummy_target_labels, device,
             model_type="dgcnn", epochs=args.epochs, batch_size=args.batch_size,
             verbose=False,
-            split_seed=run_seed, use_validation=False,
+            split_seed=run_seed, use_validation=True,
+            val_data=validation_x, val_labels=validation_y,
             label_smoothing=args.label_smoothing,
         )
         models.append(result["model"])
         if args.temperature_calibration:
             temperature, before_nll, after_nll = fit_temperature(
-                result["model"], calibration_x, calibration_y, device, args.batch_size)
+                result["model"], validation_x, validation_y, device, args.batch_size)
             temperatures.append(temperature)
             print(f"  scorer {run + 1}: temperature={temperature:.4f}, "
                   f"calibration_nll={before_nll:.4f}->{after_nll:.4f}")
         else:
             temperatures.append(1.0)
-        print(f"  scorer {run + 1}/{args.score_runs}: fixed epochs={args.epochs}, "
-              f"batch={args.batch_size}")
+        print(f"  scorer {run + 1}/{args.score_runs}: best_epoch={result['best_epoch']}, "
+              f"best_val_acc={result['best_val_accuracy']:.4f}, batch={args.batch_size}")
 
     probabilities, agreement = predict_probabilities(
         models, temperatures, target_x, device, args.batch_size)

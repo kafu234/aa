@@ -1,5 +1,5 @@
 # ============================================================
-# SEED DE 特征空间生成 — 正式训练配置
+# SEED DE 特征空间生成 — EMA 每步更新 + 500 步 warm-up
 # ============================================================
 
 model:
@@ -7,24 +7,25 @@ model:
   params:
     seq_length: 62
     feature_size: 5
-    n_layer_enc: 6            # 4→6 加深编码器
-    n_layer_dec: 6            # 4→6 加深解码器
-    d_model: 256              # 128→256 增大模型容量
-    n_heads: 8                # 4→8
+    n_layer_enc: 6
+    n_layer_dec: 6
+    d_model: 256
+    n_heads: 8
     mlp_hidden_times: 4
     attn_pd: 0.0
-    resid_pd: 0.05            # 0.1→0.05 数据量够时减小dropout
+    resid_pd: 0.05
     kernel_size: 1
     padding_size: 0
 
 solver:
-  base_lr: 1.0e-4            # 3e-4→1e-4 大模型用更小学习率
-  max_epochs: 10000           # 5000→10000 充分训练
+  base_lr: 1.0e-4
+  max_epochs: 10000
   gradient_accumulate_every: 2
   save_cycle: 1000
   ema:
-    decay: 0.9995             # 0.995→0.9995 更平滑的EMA
-    update_interval: 10
+    decay: 0.9995
+    update_interval: 1
+    warmup_steps: 500
 
 dataloader:
   train_dataset:
@@ -40,5 +41,5 @@ dataloader:
       period: train
       conditional: True
 
-  batch_size: 512             # 256→512 DE维度低可以用大batch
+  batch_size: 512
   shuffle: True

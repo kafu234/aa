@@ -44,15 +44,19 @@ from Utils.Data_utils.group_split import group_holdout, stratified_group_holdout
 
 
 class SimpleEMA:
-    def __init__(self, model, decay=0.995):
+    def __init__(self, model, decay=0.995, warmup_steps=0):
         self.decay = decay
+        self.warmup_steps = warmup_steps
         self.shadow = deepcopy(model)
         self.shadow.eval()
         for p in self.shadow.parameters():
             p.requires_grad_(False)
 
     @torch.no_grad()
-    def update(self, model):
+    def update(self, model, step):
+        if step <= self.warmup_steps:
+            self.shadow.load_generator_state_dict(model.generator_state_dict())
+            return
         for s_param, m_param in zip(self.shadow.parameters(), model.parameters()):
             s_param.data.mul_(self.decay).add_(m_param.data, alpha=1.0 - self.decay)
 
@@ -86,7 +90,11 @@ class SEEDTrainer:
             self.optimizer, mode="min", factor=0.5, patience=500, verbose=True)
 
         ema_cfg = solver_cfg.get("ema", {})
-        self.ema = SimpleEMA(model, decay=ema_cfg.get("decay", 0.995))
+        self.ema = SimpleEMA(
+            model,
+            decay=ema_cfg.get("decay", 0.995),
+            warmup_steps=ema_cfg.get("warmup_steps", 0),
+        )
         self.ema_update_every = ema_cfg.get("update_interval", 10)
 
         self.results_dir = Path(args.results_dir)
@@ -217,7 +225,7 @@ class SEEDTrainer:
 
                 self.step += 1
                 if self.step % self.ema_update_every == 0:
-                    self.ema.update(self.model)
+                    self.ema.update(self.model, self.step)
 
                 pbar.set_description(f"loss: {total_loss:.6f}")
                 pbar.update(1)
@@ -241,7 +249,13 @@ class SEEDTrainer:
 
         self.save("checkpoint-last.pt")
         best_path = self.results_dir / "checkpoint-best.pt"
-        if not best_path.exists():
+        if getattr(self.args, "no_validation", False):
+            # Fixed-step training has no model-selection criterion. Keep the
+            # compatibility filename synchronized with this run's final state
+            # instead of silently reusing a stale checkpoint from an old run.
+            self.best_loss = total_loss
+            self.save("checkpoint-best.pt")
+        elif not best_path.exists():
             self.best_loss = total_loss
             self.save("checkpoint-best.pt")
         elapsed = time.time() - tic

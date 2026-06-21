@@ -5,8 +5,6 @@ import argparse
 import numpy as np
 import torch
 
-
-
 def get_api(dataset):
     if dataset == "seed4":
         from eval_de_classifier_seed4 import load_de_data, load_synthetic_de, train_and_evaluate
@@ -53,6 +51,8 @@ def main():
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--n_runs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=1024)
+    parser.add_argument("--val_interval", type=int, default=5)
+    parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -73,7 +73,9 @@ def main():
     syn_x, syn_y = load_synthetic_de(args.synthetic_path)
 
     source_fit_x, source_fit_y = source_x, source_y
-    print(f"[Source training] no validation; using all {len(source_y)} source samples")
+    print(f"[Source training] using all {len(source_y)} source samples")
+    print("[Model selection] target test set is also used as validation "
+          "(legacy transductive protocol)")
     requested_pseudo = int(len(source_fit_y) * args.pseudo_ratio)
     requested_syn = (args.num_synthetic if args.num_synthetic is not None
                      else int(len(source_fit_y) * args.syn_ratio))
@@ -108,14 +110,17 @@ def main():
         accs, f1s = [], []
         print(f"\n{'=' * 64}\n{name}: train={len(train_y)}\n{'=' * 64}")
         for run in range(args.n_runs):
-            print(f"  starting run={run + 1}/{args.n_runs}, epochs<={args.epochs}, batch={args.batch_size}", flush=True)
+            print(f"  starting run={run + 1}/{args.n_runs}, epochs<={args.epochs}, "
+                  f"batch={args.batch_size}, val_interval={args.val_interval}, "
+                  f"patience={args.patience}", flush=True)
             run_seed = args.seed + run
             torch.manual_seed(run_seed)
             np.random.seed(run_seed)
             result = train_and_evaluate(
                 train_x, train_y, target_x, target_y, device,
                 epochs=args.epochs, batch_size=args.batch_size, verbose=False, split_seed=run_seed,
-                use_validation=False,
+                val_data=target_x, val_labels=target_y,
+                val_interval=args.val_interval, patience=args.patience,
             )
             accs.append(result["accuracy"])
             f1s.append(result["f1_macro"])

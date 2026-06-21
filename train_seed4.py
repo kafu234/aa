@@ -227,7 +227,13 @@ class SEEDTrainer:
 
         self.save("checkpoint-last.pt")
         best_path = self.results_dir / "checkpoint-best.pt"
-        if not best_path.exists():
+        if getattr(self.args, "no_validation", False):
+            # Fixed-step training has no model-selection criterion. Keep the
+            # compatibility filename synchronized with this run's final state
+            # instead of silently reusing a stale checkpoint from an old run.
+            self.best_loss = total_loss
+            self.save("checkpoint-best.pt")
+        elif not best_path.exists():
             self.best_loss = total_loss
             self.save("checkpoint-best.pt")
         elapsed = time.time() - tic

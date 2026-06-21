@@ -37,6 +37,7 @@ CLASSIFIER_WEIGHT=${CLASSIFIER_WEIGHT:-0.1}
 RUN_SOURCE=${RUN_SOURCE:-1}
 RUN_PSEUDO=${RUN_PSEUDO:-1}
 RUN_ADAPT=${RUN_ADAPT:-1}
+RUN_EVAL=${RUN_EVAL:-1}
 
 if [ "$DATASET" = "seed4" ]; then
     DATA_ROOT=${DATA_ROOT:-/root/autodl-tmp/eeg_feature_smooth}
@@ -97,7 +98,7 @@ for SUBJ in $SUBJECTS; do
         python ${TRAIN_SCRIPT} --config ${CONFIG} --gpu ${GPU} \
             --conditional --split_mode subject --test_subject ${SUBJ} \
             --no_validation \
-            --checkpoint ${BASE_DIR}/checkpoint-best.pt \
+            --checkpoint ${BASE_DIR}/checkpoint-last.pt \
             --finetune --max_epochs ${ADAPT_EPOCHS} \
             --unlabeled_finetune --use_test_period \
             --allow_transductive_test_adaptation \
@@ -112,12 +113,16 @@ for SUBJ in $SUBJECTS; do
         exit 1
     fi
 
-    echo "===== Target subject ${SUBJ}: syn_ratio=${SYN_RATIO} ====="
-    python eval_cross_subject_adaptation.py --dataset ${DATASET} \
-        --data_root ${DATA_ROOT} --test_subject ${SUBJ} \
-        --pseudo_path ${PSEUDO_FILE} \
-        --synthetic_path ${GEN_FILE} \
-        --pseudo_ratio ${PSEUDO_RATIO} --syn_ratio ${SYN_RATIO} \
-        --epochs ${EVAL_EPOCHS} --n_runs ${N_RUNS} \
-        --batch_size ${EVAL_BATCH_SIZE} --gpu ${GPU}
+    if [ "$RUN_EVAL" = "1" ]; then
+        echo "===== Target subject ${SUBJ}: syn_ratio=${SYN_RATIO} ====="
+        python eval_cross_subject_adaptation.py --dataset ${DATASET} \
+            --data_root ${DATA_ROOT} --test_subject ${SUBJ} \
+            --pseudo_path ${PSEUDO_FILE} \
+            --synthetic_path ${GEN_FILE} \
+            --pseudo_ratio ${PSEUDO_RATIO} --syn_ratio ${SYN_RATIO} \
+            --epochs ${EVAL_EPOCHS} --n_runs ${N_RUNS} \
+            --batch_size ${EVAL_BATCH_SIZE} --gpu ${GPU}
+    else
+        echo "Evaluation skipped (RUN_EVAL=0)"
+    fi
 done
