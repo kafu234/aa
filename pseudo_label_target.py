@@ -11,10 +11,10 @@ from torch.utils.data import DataLoader, TensorDataset
 
 def get_api(dataset):
     if dataset == "seed4":
-        from eval_de_classifier_seed4 import load_de_data, train_and_evaluate, NUM_CLASSES, LABEL_NAMES
-        return load_de_data, train_and_evaluate, NUM_CLASSES, LABEL_NAMES
-    from eval_de_classifier import load_de_data, train_and_evaluate
-    return load_de_data, train_and_evaluate, 3, {0: "negative", 1: "neutral", 2: "positive"}
+        from eval_de_classifier_seed4 import load_de_data, train_with_validation, NUM_CLASSES, LABEL_NAMES
+        return load_de_data, train_with_validation, NUM_CLASSES, LABEL_NAMES
+    from eval_de_classifier import load_de_data, train_with_validation
+    return load_de_data, train_with_validation, 3, {0: "negative", 1: "neutral", 2: "positive"}
 
 
 def fit_temperature(model, data, labels, device, batch_size=1024):
@@ -144,7 +144,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    load_de_data, train_and_evaluate, num_classes, names = get_api(args.dataset)
+    load_de_data, train_with_validation, num_classes, names = get_api(args.dataset)
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     source_x, source_y, target_x, _target_y, source_subjects = load_de_data(
         args.data_root, args.seed, "subject", test_subject=args.test_subject,
@@ -170,12 +170,11 @@ def main():
         print(f"  scorer {run + 1}: train={len(scorer_train_y)} samples, "
               f"validation_subject={validation_subject}, validation={len(validation_y)} samples")
         print(f"  starting scorer {run + 1}/{args.score_runs}: epochs={args.epochs}, batch={args.batch_size}", flush=True)
-        result = train_and_evaluate(
-            scorer_train_x, scorer_train_y, target_x, dummy_target_labels, device,
+        result = train_with_validation(
+            scorer_train_x, scorer_train_y, target_x, dummy_target_labels,
+            validation_x, validation_y, device,
             model_type="dgcnn", epochs=args.epochs, batch_size=args.batch_size,
             verbose=False,
-            split_seed=run_seed, use_validation=True,
-            val_data=validation_x, val_labels=validation_y,
             label_smoothing=args.label_smoothing,
         )
         models.append(result["model"])

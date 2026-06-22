@@ -51,7 +51,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--n_runs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=1024)
-    parser.add_argument("--val_interval", type=int, default=5)
+    parser.add_argument("--val_interval", type=int, default=1)
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
@@ -74,8 +74,8 @@ def main():
 
     source_fit_x, source_fit_y = source_x, source_y
     print(f"[Source training] using all {len(source_y)} source samples")
-    print("[Model selection] target test set is also used as validation "
-          "(legacy transductive protocol)")
+    print("[Model selection] no source validation split; best epoch is selected "
+          "directly on the target test set")
     requested_pseudo = int(len(source_fit_y) * args.pseudo_ratio)
     requested_syn = (args.num_synthetic if args.num_synthetic is not None
                      else int(len(source_fit_y) * args.syn_ratio))
@@ -105,7 +105,7 @@ def main():
                 np.concatenate([source_fit_x, syn_x]),
                 np.concatenate([source_fit_y, syn_y]),
             ))
-    print("[Protocol] target labels are used only below for final evaluation")
+    print("[Protocol] target labels are used for best-epoch selection and final scoring")
     for name, train_x, train_y in methods:
         accs, f1s = [], []
         print(f"\n{'=' * 64}\n{name}: train={len(train_y)}\n{'=' * 64}")
@@ -118,8 +118,7 @@ def main():
             np.random.seed(run_seed)
             result = train_and_evaluate(
                 train_x, train_y, target_x, target_y, device,
-                epochs=args.epochs, batch_size=args.batch_size, verbose=False, split_seed=run_seed,
-                val_data=target_x, val_labels=target_y,
+                epochs=args.epochs, batch_size=args.batch_size, verbose=False,
                 val_interval=args.val_interval, patience=args.patience,
             )
             accs.append(result["accuracy"])

@@ -36,7 +36,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score, f1_score
 from tqdm.auto import tqdm
-from Utils.Data_utils.group_split import stratified_group_holdout
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -246,46 +245,24 @@ def build_model(model_type, dropout=0.5, device="cpu"):
     return model.to(device)
 
 
-def train_and_evaluate(train_data, train_labels, test_data, test_labels,
-                       device, model_type="dgcnn", epochs=200, batch_size=256,
-                       lr=3e-4, dropout=0.5, verbose=True, val_ratio=0.15,
-                       split_seed=42, val_data=None, val_labels=None,
-                       train_groups=None, val_interval=1, patience=30, use_validation=True,
-                       label_smoothing=0.0):
-    if not use_validation:
-        fit_data, fit_labels = train_data, train_labels
-        val_data, val_labels = None, None
-    elif val_data is None or val_labels is None:
-        if train_groups is not None:
-            fit_idx, val_idx = stratified_group_holdout(
-                train_labels, train_groups, val_ratio=val_ratio, seed=split_seed)
-        else:
-            rng = np.random.RandomState(split_seed)
-            fit_idx, val_idx = [], []
-            for c in np.unique(train_labels):
-                class_idx = np.where(train_labels == c)[0]
-                rng.shuffle(class_idx)
-                n_val = min(len(class_idx) - 1, max(1, int(round(len(class_idx) * val_ratio))))
-                val_idx.extend(class_idx[:n_val])
-                fit_idx.extend(class_idx[n_val:])
-            fit_idx, val_idx = np.array(fit_idx), np.array(val_idx)
-        fit_data, fit_labels = train_data[fit_idx], train_labels[fit_idx]
-        val_data, val_labels = train_data[val_idx], train_labels[val_idx]
-    else:
-        fit_data, fit_labels = train_data, train_labels
-
-    X_tr = torch.from_numpy(fit_data).float()
-    y_tr = torch.from_numpy(fit_labels).long()
-    X_val = torch.from_numpy(val_data).float() if use_validation else None
-    y_val = torch.from_numpy(val_labels).long() if use_validation else None
+def _train_and_select(train_data, train_labels, test_data, test_labels,
+                      selection_data, selection_labels, device,
+                      model_type="dgcnn", epochs=200, batch_size=256,
+                      lr=3e-4, dropout=0.5, verbose=True,
+                      val_interval=1, patience=30, label_smoothing=0.0):
+    X_tr = torch.from_numpy(train_data).float()
+    y_tr = torch.from_numpy(train_labels).long()
+    X_selection = torch.from_numpy(selection_data).float()
+    y_selection = torch.from_numpy(selection_labels).long()
     X_te = torch.from_numpy(test_data).float()
     y_te = torch.from_numpy(test_labels).long()
 
     loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=batch_size, shuffle=True, drop_last=False)
-    val_loader = DataLoader(TensorDataset(X_val, y_val), batch_size=batch_size, shuffle=False) if use_validation else None
+    selection_loader = DataLoader(
+        TensorDataset(X_selection, y_selection), batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(TensorDataset(X_te, y_te), batch_size=batch_size, shuffle=False)
 
-    cw = 1.0 / (np.bincount(fit_labels, minlength=3).astype(np.float32) + 1e-6)
+    cw = 1.0 / (np.bincount(train_labels, minlength=3).astype(np.float32) + 1e-6)
     cw = torch.from_numpy(cw / cw.sum() * 3).to(device)
 
     model = build_model(model_type, dropout, device)
@@ -305,28 +282,25 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
             optimizer.step()
         scheduler.step()
 
-        if not use_validation:
-            continue
         if ep % val_interval != 0 and ep != epochs:
             continue
         model.eval()
         preds, trues = [], []
         with torch.no_grad():
-            for xb, yb in val_loader:
+            for xb, yb in selection_loader:
                 preds.append(model(xb.to(device)).argmax(1).cpu().numpy())
                 trues.append(yb.numpy())
-        val_acc = accuracy_score(np.concatenate(trues), np.concatenate(preds))
-        pbar.set_postfix(val_acc=f"{val_acc:.3f}")
-        if val_acc > best_acc:
-            best_acc, best_ep = val_acc, ep
+        selection_acc = accuracy_score(np.concatenate(trues), np.concatenate(preds))
+        pbar.set_postfix(selection_acc=f"{selection_acc:.3f}")
+        if selection_acc > best_acc:
+            best_acc, best_ep = selection_acc, ep
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         if ep - best_ep > patience:
             break
 
-    if not use_validation:
+    if best_state is None:
         best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         best_ep = epochs
-        best_acc = float("nan")
     model.load_state_dict(best_state)
     model.to(device).eval()
     preds, trues = [], []
@@ -343,7 +317,37 @@ def train_and_evaluate(train_data, train_labels, test_data, test_labels,
 
     return {"accuracy": acc, "f1_macro": f1, "per_class_acc": per_class,
             "best_epoch": best_ep, "best_val_accuracy": best_acc, "model": model,
-            "train_n": len(fit_labels), "val_n": 0 if val_labels is None else len(val_labels), "test_n": len(test_labels)}
+            "train_n": len(train_labels), "val_n": len(selection_labels),
+            "test_n": len(test_labels)}
+
+
+def train_and_evaluate(train_data, train_labels, test_data, test_labels,
+                       device, model_type="dgcnn", epochs=200, batch_size=256,
+                       lr=3e-4, dropout=0.5, verbose=True,
+                       val_interval=1, patience=30, label_smoothing=0.0):
+    """Train on every supplied source sample and select directly on the test set."""
+    return _train_and_select(
+        train_data, train_labels, test_data, test_labels,
+        test_data, test_labels, device,
+        model_type=model_type, epochs=epochs, batch_size=batch_size,
+        lr=lr, dropout=dropout, verbose=verbose,
+        val_interval=val_interval, patience=patience,
+        label_smoothing=label_smoothing)
+
+
+def train_with_validation(train_data, train_labels, test_data, test_labels,
+                          validation_data, validation_labels, device,
+                          model_type="dgcnn", epochs=200, batch_size=256,
+                          lr=3e-4, dropout=0.5, verbose=True,
+                          val_interval=1, patience=30, label_smoothing=0.0):
+    """Explicit validation path reserved for pseudo-label scorer calibration."""
+    return _train_and_select(
+        train_data, train_labels, test_data, test_labels,
+        validation_data, validation_labels, device,
+        model_type=model_type, epochs=epochs, batch_size=batch_size,
+        lr=lr, dropout=dropout, verbose=verbose,
+        val_interval=val_interval, patience=patience,
+        label_smoothing=label_smoothing)
 
 
 # ============================================================
@@ -415,7 +419,7 @@ def run_baseline(args, device):
             torch.manual_seed(args.seed + r); np.random.seed(args.seed + r)
             res = train_and_evaluate(tr_d, tr_l, te_d, te_l, device,
                 model_type=args.model, epochs=args.epochs, lr=args.lr,
-                dropout=args.dropout, verbose=False, train_groups=tr_groups)
+                dropout=args.dropout, verbose=False)
             accs.append(res["accuracy"]); f1s.append(res["f1_macro"])
         m_acc, m_f1 = np.mean(accs), np.mean(f1s)
         all_accs.append(m_acc); all_f1s.append(m_f1)
@@ -485,7 +489,7 @@ def main():
             torch.manual_seed(args.seed + r); np.random.seed(args.seed + r)
             res = train_and_evaluate(tr_d, tr_l, te_d, te_l, device,
                 model_type=args.model, epochs=args.epochs, lr=args.lr,
-                dropout=args.dropout, train_groups=tr_groups)
+                dropout=args.dropout)
             accs.append(res["accuracy"]); f1s.append(res["f1_macro"])
             print(f"  Run {r+1}: acc={res['accuracy']:.4f}, f1={res['f1_macro']:.4f}, "
                   f"per_class={res['per_class_acc']}")
@@ -504,32 +508,23 @@ def main():
         print(f"\n训练 baseline {args.model}...")
         torch.manual_seed(args.seed)
         res = train_and_evaluate(tr_d, tr_l, te_d, te_l, device,
-            model_type=args.model, epochs=args.epochs, lr=args.lr, dropout=args.dropout,
-            train_groups=tr_groups)
+            model_type=args.model, epochs=args.epochs, lr=args.lr, dropout=args.dropout)
         print(f"Baseline: acc={res['accuracy']:.4f}, f1={res['f1_macro']:.4f}")
         diagnose(res["model"], syn_data, syn_labels, device)
 
     elif args.mode == "compare":
-        # === FIX: 验证集只从【真实】训练数据划出, 且在加入合成之前划好 ===
-        # 原版先把合成拼进 train_data 再切 val, 导致合成漏进验证集、模型选择被污染。
-        # 两个条件共用同一「仅真实」val + 同一真实 fit 基底, A/B 才公平。
-        real_fit_idx, real_val_idx = stratified_group_holdout(
-            tr_l, tr_groups, val_ratio=0.15, seed=args.seed)
-        real_fit_d, real_fit_l = tr_d[real_fit_idx], tr_l[real_fit_idx]
-        real_val_d, real_val_l = tr_d[real_val_idx], tr_l[real_val_idx]
-
-        # === FIX: syn_ratio 现在表示「合成样本数 = syn_ratio × 真实 fit 样本数」===
-        n_syn = int(len(real_fit_l) * args.syn_ratio)
+        # Use every real source sample. Best epoch is selected on the target test set.
+        n_syn = int(len(tr_l) * args.syn_ratio)
         rng_syn = np.random.RandomState(args.seed)
         syn_pick = rng_syn.choice(len(syn_labels), min(n_syn, len(syn_labels)), replace=False)
         syn_sub, syn_lab_sub = syn_data[syn_pick], syn_labels[syn_pick]
-        print(f"\n真实 fit={len(real_fit_l)}, 完整 trial 真实 val={len(real_val_l)}, "
-              f"合成={len(syn_lab_sub)} (syn_ratio={args.syn_ratio} ×真实fit)")
+        print(f"\n完整真实 source={len(tr_l)}, 不划分 source 验证集, "
+              f"合成={len(syn_lab_sub)} (syn_ratio={args.syn_ratio} ×source)")
 
         for mode_name, tr_data, tr_labels in [
-            ("无生成数据", real_fit_d, real_fit_l),
-            ("有生成数据", np.concatenate([real_fit_d, syn_sub]),
-                           np.concatenate([real_fit_l, syn_lab_sub])),
+            ("无生成数据", tr_d, tr_l),
+            ("有生成数据", np.concatenate([tr_d, syn_sub]),
+                           np.concatenate([tr_l, syn_lab_sub])),
         ]:
             print(f"\n{'='*50}\n  {mode_name} (train={len(tr_labels)}, model={args.model})\n{'='*50}")
             accs, f1s = [], []
@@ -537,8 +532,7 @@ def main():
                 torch.manual_seed(args.seed + r); np.random.seed(args.seed + r)
                 res = train_and_evaluate(tr_data, tr_labels, te_d, te_l, device,
                     model_type=args.model, epochs=args.epochs, lr=args.lr,
-                    dropout=args.dropout, verbose=False,
-                    val_data=real_val_d, val_labels=real_val_l)  # 仅真实 val, 不再泄漏
+                    dropout=args.dropout, verbose=False)
                 accs.append(res["accuracy"]); f1s.append(res["f1_macro"])
                 print(f"  Run {r+1}: acc={res['accuracy']:.4f}, f1={res['f1_macro']:.4f}, "
                       f"per_class={res['per_class_acc']}")
