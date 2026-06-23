@@ -2,7 +2,7 @@
 [SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
 [SEEDDataset-DE] First file: 10_20131130.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
 [SEEDDataset-DE] Total: 152730 samples, shape: (152730, 62, 5), classes: [0, 1, 2]
-[Subject Split] train: 14 subjects (142548 samples), test: subject 2 (10182 samples)
+[Subject Split] train: 14 subjects (142548 samples), test: subject 12 (10182 samples)
   Train labels: {0: 47040, 1: 46368, 2: 49140}
   Test  labels: {0: 3360, 1: 3312, 2: 3510}
 [SEEDDataset] period=train, samples=142548, shape=(62, 5), classes=[0, 1, 2]
@@ -10,35 +10,35 @@
 [SEEDDataset] Labels: [1, 0, -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 0, 1, -1]
 [SEEDDataset-DE] First file: 10_20131130.mat, 15 trials, 3394 samples, shape per sample: (62, 5)
 [SEEDDataset-DE] Total: 152730 samples, shape: (152730, 62, 5), classes: [0, 1, 2]
-[Subject Split] train: 14 subjects (142548 samples), test: subject 2 (10182 samples)
+[Subject Split] train: 14 subjects (142548 samples), test: subject 12 (10182 samples)
   Train labels: {0: 47040, 1: 46368, 2: 49140}
   Test  labels: {0: 3360, 1: 3312, 2: 3510}
 [SEEDDataset] period=test, samples=10182, shape=(62, 5), classes=[0, 1, 2]
 [所有被试] Train: (142548, 62, 5), Test: (10182, 62, 5)
   Train labels: {0: 47040, 1: 46368, 2: 49140}
   Test  labels: {0: 3360, 1: 3312, 2: 3510}
-[Synthetic] (30000, 62, 5), labels: {0: 10000, 1: 10000, 2: 10000}
+[Synthetic] (14254, 62, 5), labels: {0: 4752, 1: 4751, 2: 4751}
 [Source training] using all 142548 source samples
 [Model selection] no source validation split; best epoch is selected directly on the target test set
 [Comparison counts] pseudo=0, target_adapted_synthetic=14254
 [Protocol] target labels are used for best-epoch selection and final scoring
 
 ================================================================
-source_only: train=142548
+source+target_adapted_synthetic: train=156802
 ================================================================
   starting run=1/5, epochs<=200, batch=1024, val_interval=1, patience=20
   Model: dgcnn, params: 1,021,384
-  run=1: acc=0.8120, f1=0.8105
+  run=1: acc=0.7880, f1=0.7855
   starting run=2/5, epochs<=200, batch=1024, val_interval=1, patience=20
   Model: dgcnn, params: 1,021,384
-  run=2: acc=0.8004, f1=0.7990
+  run=2: acc=0.7871, f1=0.7832
   starting run=3/5, epochs<=200, batch=1024, val_interval=1, patience=20
   Model: dgcnn, params: 1,021,384
-  run=3: acc=0.7830, f1=0.7832
+  run=3: acc=0.7783, f1=0.7748
   starting run=4/5, epochs<=200, batch=1024, val_interval=1, patience=20
   Model: dgcnn, params: 1,021,384
-  run=4: acc=0.8072, f1=0.8064
+  run=4: acc=0.7633, f1=0.7605
   starting run=5/5, epochs<=200, batch=1024, val_interval=1, patience=20
   Model: dgcnn, params: 1,021,384
-  run=5: acc=0.8189, f1=0.8179
-  mean: acc=0.8043+-0.0122, f1=0.8034+-0.0118
+  run=5: acc=0.7830, f1=0.7797
+  mean: acc=0.7799+-0.0090, f1=0.7767+-0.0089
