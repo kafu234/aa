@@ -6,7 +6,8 @@ import torch.nn.functional as F
 from torch import nn
 from einops import rearrange, reduce, repeat
 from Models.interpretable_diffusion.model_utils import LearnablePositionalEncoding, Conv_MLP,\
-                                                       AdaLayerNorm, Transpose, RMSNorm, GELU2, series_decomp
+                                                       AdaLayerNorm, Transpose, RMSNorm, GELU2, series_decomp,\
+                                                       drop_edge
 import os
 
 
@@ -382,7 +383,10 @@ class FullAttention(nn.Module):
                  n_channel=62,         # ← NEW
                  attn_pdrop=0.1,
                  resid_pdrop=0.1,
-                 max_len=None
+                 max_len=None,
+                 use_graph_bias=False,
+                 graph_dropedge=0.1,
+                 graph_gate_init=-4.0,
     ):
         super().__init__()
         assert n_embd % n_head == 0
@@ -411,8 +415,11 @@ class FullAttention(nn.Module):
 
         # ---- Spatial attention bias (NEW) ----
         self.spatial_bias = SpatialAttentionBias(n_channel, n_head)
+        self.use_graph_bias = bool(use_graph_bias)
+        self.graph_dropedge = float(graph_dropedge)
+        self.graph_gate = nn.Parameter(torch.tensor(float(graph_gate_init)))
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, graph_bias_matrix=None):
         B, T, C = x.size()
         k = self.key(x)
         q = self.query(x)
@@ -426,7 +433,7 @@ class FullAttention(nn.Module):
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
 
         if int(os.environ.get('hucfg_attention_rope_use', '-1')) == 1: 
-            freqs_cis = self.freqs_cis.cuda()[0 : T]
+            freqs_cis = self.freqs_cis.to(q.device)[0 : T]
             q, k = apply_rotary_emb(q.permute(0,2,1,3), k.permute(0,2,1,3), freqs_cis=freqs_cis)
             q, k = q.permute(0,2,1,3), k.permute(0,2,1,3)
 
@@ -438,6 +445,13 @@ class FullAttention(nn.Module):
         sp_bias = self.spatial_bias()  # (1, nh, C, C)
         if T == sp_bias.shape[-1]:
             att = att + sp_bias
+
+        if self.use_graph_bias and graph_bias_matrix is not None:
+            A_graph = graph_bias_matrix.to(device=att.device, dtype=att.dtype)
+            if A_graph.ndim == 2 and A_graph.shape[0] == T and A_graph.shape[1] == T:
+                A_used = drop_edge(A_graph, self.graph_dropedge, self.training)
+                gate = torch.sigmoid(self.graph_gate).to(dtype=att.dtype)
+                att = att + gate * A_used.unsqueeze(0).unsqueeze(0)
 
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
@@ -500,7 +514,7 @@ class CrossAttention(nn.Module):
         k = k.view(B, T_E, self.n_head, C // self.n_head).transpose(1, 2)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
 
-        freqs_cis = self.freqs_cis.cuda()[0 : T]
+        freqs_cis = self.freqs_cis.to(q.device)[0 : T]
         q, k = apply_rotary_emb(q.permute(0,2,1,3), k.permute(0,2,1,3), freqs_cis=freqs_cis)
         q, k = q.permute(0,2,1,3), k.permute(0,2,1,3)
 
@@ -537,6 +551,9 @@ class EncoderBlock(nn.Module):
                  activate='GELU',
                  max_len=None,
                  electrode_coords=None,   # ← NEW
+                 use_graph_bias=False,
+                 graph_dropedge=0.1,
+                 graph_gate_init=-4.0,
                  ):
         super().__init__()
 
@@ -548,7 +565,10 @@ class EncoderBlock(nn.Module):
                 n_channel=n_channel,   # ← NEW
                 attn_pdrop=attn_pdrop,
                 resid_pdrop=resid_pdrop,
-                max_len=max_len
+                max_len=max_len,
+                use_graph_bias=use_graph_bias,
+                graph_dropedge=graph_dropedge,
+                graph_gate_init=graph_gate_init,
             )
         
         assert activate in ['GELU', 'GELU2']
@@ -561,8 +581,12 @@ class EncoderBlock(nn.Module):
                 nn.Dropout(resid_pdrop),
             )
         
-    def forward(self, x, timestep, mask=None, label_emb=None):
-        a, att = self.attn(self.ln1(x, timestep, label_emb), mask=mask)
+    def forward(self, x, timestep, mask=None, label_emb=None, graph_bias_matrix=None):
+        a, att = self.attn(
+            self.ln1(x, timestep, label_emb),
+            mask=mask,
+            graph_bias_matrix=graph_bias_matrix,
+        )
         x = x + a
         x = x + self.mlp(self.ln2(x))
         return x, att
@@ -581,6 +605,10 @@ class Encoder(nn.Module):
         block_activate='GELU',
         max_len=None,
         electrode_coords=None,     # ← NEW
+        use_graph_bias=False,
+        graph_bias_layers=2,
+        graph_dropedge=0.1,
+        graph_gate_init=-4.0,
     ):
         super().__init__()
 
@@ -594,12 +622,23 @@ class Encoder(nn.Module):
                 activate=block_activate,
                 max_len=max_len,
                 electrode_coords=electrode_coords,  # ← NEW
+                use_graph_bias=use_graph_bias,
+                graph_dropedge=graph_dropedge,
+                graph_gate_init=graph_gate_init,
         ) for _ in range(n_layer)])
+        self.use_graph_bias = bool(use_graph_bias)
+        self.graph_bias_layers = max(0, int(graph_bias_layers))
 
-    def forward(self, input, t, padding_masks=None, label_emb=None):
+    def forward(self, input, t, padding_masks=None, label_emb=None, graph_bias_matrix=None):
         x = input
         for block_idx in range(len(self.blocks)):
-            x, _ = self.blocks[block_idx](x, t, mask=padding_masks, label_emb=label_emb)
+            layer_graph = graph_bias_matrix if (
+                self.use_graph_bias and block_idx < self.graph_bias_layers
+            ) else None
+            x, _ = self.blocks[block_idx](
+                x, t, mask=padding_masks, label_emb=label_emb,
+                graph_bias_matrix=layer_graph,
+            )
         return x
 
 
@@ -739,9 +778,19 @@ class Transformer(nn.Module):
         block_activate='GELU',
         max_len=2048,
         conv_params=None,
+        use_graph_bias=False,
+        graph_dropedge=0.1,
+        graph_bias_layers=2,
+        graph_gate_init=-4.0,
         **kwargs
     ):
         super().__init__()
+        self.n_channel = n_channel
+        self.use_graph_bias = bool(use_graph_bias)
+        self.graph_bias_layers = max(0, int(graph_bias_layers))
+        self.register_buffer('graph_bias_matrix', torch.zeros(n_channel, n_channel))
+        self.register_buffer('source_graph_matrix', torch.zeros(n_channel, n_channel))
+        self.register_buffer('target_graph_matrix', torch.zeros(n_channel, n_channel))
         self.emb = Conv_MLP(n_feat, n_embd, resid_pdrop=resid_pdrop)
         self.inverse = Conv_MLP(n_embd, n_feat, resid_pdrop=resid_pdrop)
 
@@ -771,6 +820,10 @@ class Transformer(nn.Module):
             mlp_hidden_times=mlp_hidden_times,
             block_activate=block_activate, max_len=self.max_len,
             electrode_coords=electrode_coords,
+            use_graph_bias=self.use_graph_bias,
+            graph_bias_layers=self.graph_bias_layers,
+            graph_dropedge=graph_dropedge,
+            graph_gate_init=graph_gate_init,
         )
 
         self.decoder = Decoder(
@@ -782,6 +835,49 @@ class Transformer(nn.Module):
             electrode_coords=electrode_coords,
         )
 
+    def _prepare_graph(self, A_graph):
+        if A_graph is None:
+            return torch.zeros_like(self.graph_bias_matrix)
+        A = torch.as_tensor(
+            A_graph,
+            dtype=self.graph_bias_matrix.dtype,
+            device=self.graph_bias_matrix.device,
+        )
+        if A.ndim != 2 or A.shape[0] != self.n_channel or A.shape[1] != self.n_channel:
+            raise ValueError(
+                f"graph must have shape ({self.n_channel}, {self.n_channel}), got {tuple(A.shape)}")
+        A = torch.nan_to_num(A, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+        A = torch.maximum(A, A.t())
+        A.fill_diagonal_(0.0)
+        max_val = A.max()
+        if torch.isfinite(max_val) and float(max_val) > 0:
+            A = A / max_val
+        return A.detach()
+
+    @torch.no_grad()
+    def set_graph(self, A_graph):
+        self.graph_bias_matrix.copy_(self._prepare_graph(A_graph))
+
+    @torch.no_grad()
+    def set_source_graph(self, A_source):
+        prepared = self._prepare_graph(A_source)
+        self.source_graph_matrix.copy_(prepared)
+        self.graph_bias_matrix.copy_(prepared)
+
+    @torch.no_grad()
+    def set_target_graph(self, A_target):
+        self.target_graph_matrix.copy_(self._prepare_graph(A_target))
+
+    @torch.no_grad()
+    def set_mixed_graph(self, A_source, A_target, target_graph_weight=0.3):
+        w = float(np.clip(target_graph_weight, 0.0, 1.0))
+        source = self._prepare_graph(A_source)
+        target = self._prepare_graph(A_target)
+        mixed = (1.0 - w) * source + w * target
+        self.source_graph_matrix.copy_(source)
+        self.target_graph_matrix.copy_(target)
+        self.graph_bias_matrix.copy_(self._prepare_graph(mixed))
+
     def forward(self, input, t, padding_masks=None, return_res=False, label_emb=None):
         emb = self.emb(input)
 
@@ -789,7 +885,14 @@ class Transformer(nn.Module):
         emb = self.spatial_pe(emb)
 
         inp_enc = emb
-        enc_cond = self.encoder(inp_enc, t, padding_masks=padding_masks, label_emb=label_emb)
+        graph_bias_matrix = self.graph_bias_matrix if (
+            self.use_graph_bias and self.graph_bias_layers > 0
+            and torch.count_nonzero(self.graph_bias_matrix).item() > 0
+        ) else None
+        enc_cond = self.encoder(
+            inp_enc, t, padding_masks=padding_masks, label_emb=label_emb,
+            graph_bias_matrix=graph_bias_matrix,
+        )
 
         inp_dec = emb
         output, mean, band = self.decoder(inp_dec, t, enc_cond, padding_masks=padding_masks, label_emb=label_emb)

@@ -8,9 +8,11 @@ import torch
 def get_api(dataset):
     if dataset == "seed4":
         from eval_de_classifier_seed4 import load_de_data, load_synthetic_de, train_and_evaluate
-        return load_de_data, load_synthetic_de, train_and_evaluate
+        return load_de_data, load_synthetic_de, train_and_evaluate, 4, [
+            "neutral", "sad", "fear", "happy"]
     from eval_de_classifier import load_de_data, load_synthetic_de, train_and_evaluate
-    return load_de_data, load_synthetic_de, train_and_evaluate
+    return load_de_data, load_synthetic_de, train_and_evaluate, 3, [
+        "negative", "neutral", "positive"]
 
 
 def load_pseudo(path):
@@ -55,14 +57,38 @@ def main():
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--model", choices=["dgcnn", "de_transformer", "msmda"],
+                        default="dgcnn")
+    parser.add_argument("--msmda_lr", type=float, default=1e-3)
+    parser.add_argument("--msmda_libeer_strict", action="store_true",
+                        help="use LibEER's SEED Session-1 MS-MDA protocol")
+    parser.add_argument("--msmda_session", type=int, choices=[1, 2, 3],
+                        default=1)
     args = parser.parse_args()
 
-    load_de_data, load_synthetic_de, train_and_evaluate = get_api(args.dataset)
+    (load_de_data, load_synthetic_de, train_and_evaluate,
+     num_classes, class_names) = get_api(args.dataset)
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
-    source_x, source_y, target_x, target_y, source_subjects = load_de_data(
-        args.data_root, args.seed, "subject", test_subject=args.test_subject,
-        return_subjects=True,
-    )
+    if args.msmda_libeer_strict:
+        if args.model != "msmda" or args.dataset != "seed":
+            parser.error("--msmda_libeer_strict requires --model msmda --dataset seed")
+        from msmda_downstream import load_libeer_seed_session
+        source_x, source_y, target_x, target_y, source_subjects = (
+            load_libeer_seed_session(
+                args.data_root, args.test_subject, args.msmda_session))
+        args.epochs = 200
+        args.batch_size = 256
+        args.seed = 20
+        args.msmda_lr = 0.01
+        args.val_interval = 1
+        args.patience = None
+        print("[LibEER strict MS-MDA] epochs=200, batch=256, lr=0.01, "
+              "seed=20, no early stopping")
+    else:
+        source_x, source_y, target_x, target_y, source_subjects = load_de_data(
+            args.data_root, args.seed, "subject", test_subject=args.test_subject,
+            return_subjects=True,
+        )
     if "pseudo" in args.methods:
         if args.pseudo_path is None:
             parser.error("--pseudo_path is required when --methods includes pseudo")
@@ -92,21 +118,21 @@ def main():
     methods = []
     for method in args.methods:
         if method == "source_only":
-            methods.append(("source_only", source_fit_x, source_fit_y))
+            methods.append(("source_only", None, None))
         elif method == "pseudo":
-            methods.append((
-                "source+pseudo",
-                np.concatenate([source_fit_x, pseudo_x]),
-                np.concatenate([source_fit_y, pseudo_y]),
-            ))
+            methods.append(("source+pseudo", pseudo_x, pseudo_y))
         else:
-            methods.append((
-                "source+target_adapted_synthetic",
-                np.concatenate([source_fit_x, syn_x]),
-                np.concatenate([source_fit_y, syn_y]),
-            ))
+            methods.append(("source+target_adapted_synthetic", syn_x, syn_y))
     print("[Protocol] target labels are used for best-epoch selection and final scoring")
-    for name, train_x, train_y in methods:
+    if args.model == "msmda":
+        print("[MS-MDA] one branch per real source subject; pseudo/synthetic "
+              "samples form one additional labeled target-style source domain")
+    for name, bridge_x, bridge_y in methods:
+        if bridge_y is None:
+            train_x, train_y = source_fit_x, source_fit_y
+        else:
+            train_x = np.concatenate([source_fit_x, bridge_x])
+            train_y = np.concatenate([source_fit_y, bridge_y])
         accs, f1s = [], []
         print(f"\n{'=' * 64}\n{name}: train={len(train_y)}\n{'=' * 64}")
         for run in range(args.n_runs):
@@ -116,11 +142,26 @@ def main():
             run_seed = args.seed + run
             torch.manual_seed(run_seed)
             np.random.seed(run_seed)
-            result = train_and_evaluate(
-                train_x, train_y, target_x, target_y, device,
-                epochs=args.epochs, batch_size=args.batch_size, verbose=False,
-                val_interval=args.val_interval, patience=args.patience,
-            )
+            if args.model == "msmda":
+                from msmda_downstream import train_msmda_and_evaluate
+                result = train_msmda_and_evaluate(
+                    source_fit_x, source_fit_y, source_subjects,
+                    target_x, target_y, device,
+                    synthetic_data=bridge_x, synthetic_labels=bridge_y,
+                    num_classes=num_classes, class_names=class_names,
+                    epochs=args.epochs, batch_size=args.batch_size,
+                    lr=args.msmda_lr, verbose=False,
+                    val_interval=args.val_interval,
+                    patience=args.patience,
+                    libeer_strict=args.msmda_libeer_strict,
+                )
+            else:
+                result = train_and_evaluate(
+                    train_x, train_y, target_x, target_y, device,
+                    model_type=args.model, epochs=args.epochs,
+                    batch_size=args.batch_size, verbose=False,
+                    val_interval=args.val_interval, patience=args.patience,
+                )
             accs.append(result["accuracy"])
             f1s.append(result["f1_macro"])
             print(f"  run={run + 1}: acc={result['accuracy']:.4f}, f1={result['f1_macro']:.4f}")

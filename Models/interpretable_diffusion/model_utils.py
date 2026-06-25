@@ -2,6 +2,7 @@ import math
 import scipy
 import torch
 import torch.nn.functional as F
+import numpy as np
 
 from torch import nn, einsum
 from functools import partial
@@ -42,6 +43,120 @@ def normalize_to_neg_one_to_one(x):
 
 def unnormalize_to_zero_to_one(x):
     return (x + 1) * 0.5
+
+
+def _zero_graph(n_channel, dtype=torch.float32, device=None):
+    return torch.zeros((n_channel, n_channel), dtype=dtype, device=device)
+
+
+def build_data_driven_graph(x, topk=6, abs_corr=True, sample_weight=None, eps=1e-6):
+    """
+    Build a sparse channel graph from EEG samples by Pearson correlation.
+
+    Args:
+        x: numpy array or tensor with shape [N, C, F].
+        topk: number of neighbors kept for each channel.
+        abs_corr: use absolute correlation values when True.
+        sample_weight: optional [N] weights for confidence-weighted target anchors.
+        eps: numerical stability constant.
+
+    Returns:
+        FloatTensor [C, C] with zero diagonal, symmetric top-k edges in [0, 1].
+    """
+    try:
+        if torch.is_tensor(x):
+            x_t = x.detach().float().cpu()
+        else:
+            x_t = torch.as_tensor(np.asarray(x), dtype=torch.float32)
+
+        if x_t.ndim != 3 or x_t.shape[0] < 2 or x_t.shape[1] < 2:
+            n_channel = int(x_t.shape[1]) if x_t.ndim >= 2 else 62
+            return _zero_graph(n_channel)
+
+        n_sample, n_channel, n_feat = x_t.shape
+        flat = x_t.permute(1, 0, 2).reshape(n_channel, n_sample * n_feat)
+
+        if sample_weight is not None:
+            w = torch.as_tensor(sample_weight, dtype=torch.float32).flatten().cpu()
+            if w.numel() != n_sample:
+                return _zero_graph(n_channel)
+            w = torch.nan_to_num(w, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+            if float(w.sum()) <= eps:
+                return _zero_graph(n_channel)
+            w = w.repeat_interleave(n_feat)
+            w_sum = w.sum().clamp_min(eps)
+            mean = (flat * w.unsqueeze(0)).sum(dim=1, keepdim=True) / w_sum
+            centered = flat - mean
+            cov = (centered * w.unsqueeze(0)) @ centered.t() / w_sum
+        else:
+            centered = flat - flat.mean(dim=1, keepdim=True)
+            cov = centered @ centered.t() / max(flat.shape[1] - 1, 1)
+
+        var = torch.diag(cov).clamp_min(0.0)
+        if torch.count_nonzero(var > eps).item() < 2:
+            return _zero_graph(n_channel)
+        denom = torch.sqrt(var.unsqueeze(0) * var.unsqueeze(1)).clamp_min(eps)
+        corr = cov / denom
+        corr = torch.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
+        if abs_corr:
+            corr = corr.abs()
+        corr.fill_diagonal_(0.0)
+        corr = corr.clamp_min(0.0)
+
+        k = int(topk)
+        if k <= 0:
+            return _zero_graph(n_channel)
+        k = min(k, n_channel - 1)
+        values, indices = torch.topk(corr, k=k, dim=1, largest=True, sorted=False)
+        sparse = torch.zeros_like(corr)
+        sparse.scatter_(1, indices, values)
+        sparse = torch.maximum(sparse, sparse.t())
+        sparse.fill_diagonal_(0.0)
+
+        max_val = sparse.max()
+        if not torch.isfinite(max_val) or float(max_val) <= eps:
+            return _zero_graph(n_channel)
+        sparse = sparse / max_val
+        return sparse.to(dtype=torch.float32)
+    except Exception:
+        n_channel = 62
+        try:
+            shape = x.shape if hasattr(x, "shape") else np.asarray(x).shape
+            if len(shape) >= 2:
+                n_channel = int(shape[1])
+        except Exception:
+            pass
+        return _zero_graph(n_channel)
+
+
+def drop_edge(A, drop_prob=0.1, training=True):
+    """
+    Randomly drop non-zero undirected edges without mutating the input graph.
+    """
+    if A is None:
+        return None
+    out = A.clone()
+    if (not training) or drop_prob <= 0:
+        out.fill_diagonal_(0.0)
+        return out
+
+    drop_prob = float(drop_prob)
+    if drop_prob >= 1.0:
+        out.zero_()
+        return out
+
+    edge_mask = (out != 0)
+    upper = torch.triu(edge_mask, diagonal=1)
+    if not upper.any():
+        out.fill_diagonal_(0.0)
+        return out
+
+    keep_upper = torch.rand(out.shape, device=out.device) >= drop_prob
+    keep_upper = torch.triu(keep_upper, diagonal=1) & upper
+    keep = keep_upper | keep_upper.t()
+    out = out * keep.to(dtype=out.dtype)
+    out.fill_diagonal_(0.0)
+    return out
 
 
 # sinusoidal positional embeds

@@ -26,6 +26,15 @@ solver:
     decay: 0.9995             # 0.995→0.9995 更平滑的EMA
     update_interval: 10
 
+use_graph_bias: false
+graph_topk: 6
+graph_dropedge: 0.1
+graph_bias_layers: 2
+graph_gate_init: -4.0
+use_dual_graph: true
+target_graph_weight: 0.3
+use_confidence_weighted_target_graph: true
+
 dataloader:
   train_dataset:
     target: Utils.Data_utils.seed_dataset.SEEDDataset

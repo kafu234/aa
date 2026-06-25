@@ -129,6 +129,9 @@ class FM_TS(nn.Module):
         self.condition_margin = condition_margin
         self.condition_margin_max_t = condition_margin_max_t
         self.condition_margin_batch = condition_margin_batch
+        self.register_buffer("graph_bias_matrix", torch.zeros(seq_length, seq_length))
+        self.register_buffer("source_graph_matrix", torch.zeros(seq_length, seq_length))
+        self.register_buffer("target_graph_matrix", torch.zeros(seq_length, seq_length))
 
         # DE 模式 (feature_size<=10): 禁用频谱损失 (5个频带特征做FFT无意义)
         if feature_size <= 10 and spectral_weight > 0:
@@ -158,6 +161,55 @@ class FM_TS(nn.Module):
         self.alpha = 3
         self.time_scalar = 1000
         self.num_timesteps = int(os.environ.get('hucfg_num_steps', '100'))
+
+    def _prepare_graph(self, A_graph):
+        if A_graph is None:
+            return torch.zeros_like(self.graph_bias_matrix)
+        A = torch.as_tensor(
+            A_graph,
+            dtype=self.graph_bias_matrix.dtype,
+            device=self.graph_bias_matrix.device,
+        )
+        if A.ndim != 2 or A.shape[0] != self.seq_length or A.shape[1] != self.seq_length:
+            raise ValueError(
+                f"graph must have shape ({self.seq_length}, {self.seq_length}), got {tuple(A.shape)}")
+        A = torch.nan_to_num(A, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+        A = torch.maximum(A, A.t())
+        A.fill_diagonal_(0.0)
+        max_val = A.max()
+        if torch.isfinite(max_val) and float(max_val) > 0:
+            A = A / max_val
+        return A.detach()
+
+    @torch.no_grad()
+    def set_graph(self, A_graph):
+        graph = self._prepare_graph(A_graph)
+        self.graph_bias_matrix.copy_(graph)
+        self.model.set_graph(graph)
+
+    @torch.no_grad()
+    def set_source_graph(self, A_source):
+        source = self._prepare_graph(A_source)
+        self.source_graph_matrix.copy_(source)
+        self.graph_bias_matrix.copy_(source)
+        self.model.set_source_graph(source)
+
+    @torch.no_grad()
+    def set_target_graph(self, A_target):
+        target = self._prepare_graph(A_target)
+        self.target_graph_matrix.copy_(target)
+        self.model.set_target_graph(target)
+
+    @torch.no_grad()
+    def set_mixed_graph(self, A_source, A_target, target_graph_weight=0.3):
+        w = float(np.clip(target_graph_weight, 0.0, 1.0))
+        source = self._prepare_graph(A_source)
+        target = self._prepare_graph(A_target)
+        mixed = self._prepare_graph((1.0 - w) * source + w * target)
+        self.source_graph_matrix.copy_(source)
+        self.target_graph_matrix.copy_(target)
+        self.graph_bias_matrix.copy_(mixed)
+        self.model.set_mixed_graph(source, target, target_graph_weight=w)
 
     # Guidance classifier is saved separately from generator checkpoints.
     # This prevents a pretrained or subject-specific classifier from being

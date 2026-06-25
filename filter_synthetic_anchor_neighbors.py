@@ -8,10 +8,15 @@ from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
-from eval_de_classifier import load_synthetic_de
-
-
-CLASS_NAMES = ("negative", "neutral", "positive")
+def get_dataset_api(dataset):
+    if dataset == "seed4":
+        from eval_de_classifier_seed4 import (
+            LABEL_NAMES, NUM_CLASSES, load_synthetic_de)
+        return NUM_CLASSES, tuple(
+            LABEL_NAMES[class_id] for class_id in range(NUM_CLASSES)
+        ), load_synthetic_de
+    from eval_de_classifier import load_synthetic_de
+    return 3, ("negative", "neutral", "positive"), load_synthetic_de
 
 
 def balanced_counts(total, num_classes):
@@ -25,6 +30,7 @@ def balanced_counts(total, num_classes):
 def main():
     parser = argparse.ArgumentParser(
         description="Create fixed-size synthetic subsets ranked by target-anchor consistency")
+    parser.add_argument("--dataset", choices=["seed", "seed4"], default="seed")
     parser.add_argument("--synthetic_path", required=True)
     parser.add_argument("--anchor_path", required=True)
     parser.add_argument("--output_dir", required=True)
@@ -34,16 +40,20 @@ def main():
     parser.add_argument("--pca_variance", type=float, default=0.95)
     args = parser.parse_args()
 
+    num_classes, class_names, load_synthetic_de = get_dataset_api(args.dataset)
     synthetic_x, synthetic_y = load_synthetic_de(args.synthetic_path)
     anchor_bundle = np.load(args.anchor_path)
     anchor_x = np.clip(
         anchor_bundle["data"] / 5.0, -1.0, 1.0).astype(np.float32)
     anchor_y = anchor_bundle["labels"].astype(np.int64)
 
-    if sorted(np.unique(synthetic_y).tolist()) != [0, 1, 2]:
-        raise ValueError("Synthetic data must contain all three SEED classes")
-    if sorted(np.unique(anchor_y).tolist()) != [0, 1, 2]:
-        raise ValueError("Anchor data must contain all three SEED classes")
+    expected_classes = list(range(num_classes))
+    if sorted(np.unique(synthetic_y).tolist()) != expected_classes:
+        raise ValueError(
+            f"Synthetic data must contain all {num_classes} {args.dataset} classes")
+    if sorted(np.unique(anchor_y).tolist()) != expected_classes:
+        raise ValueError(
+            f"Anchor data must contain all {num_classes} {args.dataset} classes")
     if not 1 <= args.neighbors <= len(anchor_y):
         raise ValueError("--neighbors must be within the anchor sample count")
 
@@ -76,7 +86,7 @@ def main():
     print(
         f"Anchors={len(anchor_y)}, synthetic={len(synthetic_y)}, "
         f"PCA components={pca.n_components_}, k={args.neighbors}")
-    for class_id, name in enumerate(CLASS_NAMES):
+    for class_id, name in enumerate(class_names):
         class_indices = np.flatnonzero(synthetic_y == class_id)
         # Primary key: purity descending. Secondary key: same-class distance ascending.
         order = np.lexsort((same_distance[class_indices], -purity[class_indices]))
@@ -91,7 +101,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     for ratio in args.ratios:
         requested = int(args.source_count * ratio)
-        counts = balanced_counts(requested, 3)
+        counts = balanced_counts(requested, num_classes)
         selected_parts = []
         print(f"\nratio={ratio:.3f}, requested={requested}")
         for class_id, count in enumerate(counts):
@@ -103,7 +113,7 @@ def main():
             chosen = ranked[:count]
             selected_parts.append(chosen)
             print(
-                f"  {CLASS_NAMES[class_id]}: kept={count}, "
+                f"  {class_names[class_id]}: kept={count}, "
                 f"purity mean={purity[chosen].mean():.3f}, "
                 f"minimum={purity[chosen].min():.3f}, "
                 f"same-distance mean={same_distance[chosen].mean():.3f}")
