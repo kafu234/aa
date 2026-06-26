@@ -57,38 +57,16 @@ def main():
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--model", choices=["dgcnn", "de_transformer", "msmda"],
+    parser.add_argument("--model", choices=["dgcnn", "de_transformer"],
                         default="dgcnn")
-    parser.add_argument("--msmda_lr", type=float, default=1e-3)
-    parser.add_argument("--msmda_libeer_strict", action="store_true",
-                        help="use LibEER's SEED Session-1 MS-MDA protocol")
-    parser.add_argument("--msmda_session", type=int, choices=[1, 2, 3],
-                        default=1)
     args = parser.parse_args()
 
     (load_de_data, load_synthetic_de, train_and_evaluate,
      num_classes, class_names) = get_api(args.dataset)
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
-    if args.msmda_libeer_strict:
-        if args.model != "msmda" or args.dataset != "seed":
-            parser.error("--msmda_libeer_strict requires --model msmda --dataset seed")
-        from msmda_downstream import load_libeer_seed_session
-        source_x, source_y, target_x, target_y, source_subjects = (
-            load_libeer_seed_session(
-                args.data_root, args.test_subject, args.msmda_session))
-        args.epochs = 200
-        args.batch_size = 256
-        args.seed = 20
-        args.msmda_lr = 0.01
-        args.val_interval = 1
-        args.patience = None
-        print("[LibEER strict MS-MDA] epochs=200, batch=256, lr=0.01, "
-              "seed=20, no early stopping")
-    else:
-        source_x, source_y, target_x, target_y, source_subjects = load_de_data(
-            args.data_root, args.seed, "subject", test_subject=args.test_subject,
-            return_subjects=True,
-        )
+    source_x, source_y, target_x, target_y = load_de_data(
+        args.data_root, args.seed, "subject", test_subject=args.test_subject,
+    )
     if "pseudo" in args.methods:
         if args.pseudo_path is None:
             parser.error("--pseudo_path is required when --methods includes pseudo")
@@ -124,9 +102,6 @@ def main():
         else:
             methods.append(("source+target_adapted_synthetic", syn_x, syn_y))
     print("[Protocol] target labels are used for best-epoch selection and final scoring")
-    if args.model == "msmda":
-        print("[MS-MDA] one branch per real source subject; pseudo/synthetic "
-              "samples form one additional labeled target-style source domain")
     for name, bridge_x, bridge_y in methods:
         if bridge_y is None:
             train_x, train_y = source_fit_x, source_fit_y
@@ -142,26 +117,12 @@ def main():
             run_seed = args.seed + run
             torch.manual_seed(run_seed)
             np.random.seed(run_seed)
-            if args.model == "msmda":
-                from msmda_downstream import train_msmda_and_evaluate
-                result = train_msmda_and_evaluate(
-                    source_fit_x, source_fit_y, source_subjects,
-                    target_x, target_y, device,
-                    synthetic_data=bridge_x, synthetic_labels=bridge_y,
-                    num_classes=num_classes, class_names=class_names,
-                    epochs=args.epochs, batch_size=args.batch_size,
-                    lr=args.msmda_lr, verbose=False,
-                    val_interval=args.val_interval,
-                    patience=args.patience,
-                    libeer_strict=args.msmda_libeer_strict,
-                )
-            else:
-                result = train_and_evaluate(
-                    train_x, train_y, target_x, target_y, device,
-                    model_type=args.model, epochs=args.epochs,
-                    batch_size=args.batch_size, verbose=False,
-                    val_interval=args.val_interval, patience=args.patience,
-                )
+            result = train_and_evaluate(
+                train_x, train_y, target_x, target_y, device,
+                model_type=args.model, epochs=args.epochs,
+                batch_size=args.batch_size, verbose=False,
+                val_interval=args.val_interval, patience=args.patience,
+            )
             accs.append(result["accuracy"])
             f1s.append(result["f1_macro"])
             print(f"  run={run + 1}: acc={result['accuracy']:.4f}, f1={result['f1_macro']:.4f}")
