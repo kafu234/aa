@@ -57,7 +57,13 @@ def main():
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--model", choices=["dgcnn", "dan", "nsal_dgat", "dgat_bls"], default="dgcnn")
+    parser.add_argument(
+        "--model",
+        choices=[
+            "dgcnn", "dan", "nsal_dgat", "dgat_bls", "gcbnet", "pgcn",
+        ],
+        default="dgcnn",
+    )
     args = parser.parse_args()
     if args.dataset == "seed4" and args.model in ("dan", "nsal_dgat"):
         parser.error(f"{args.model} is currently wired for 3-class SEED DE features")

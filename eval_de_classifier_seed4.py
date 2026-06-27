@@ -188,6 +188,15 @@ def build_model(model_type, dropout=0.5, device="cpu"):
     if model_type == "dgcnn":
         model = DGCNN(num_electrodes=62, in_channels=5, num_classes=NUM_CLASSES,
                        k=2, dropout_rate=dropout)
+    elif model_type == "gcbnet":
+        from gcbnet_downstream import GCBNetClassifier
+        model = GCBNetClassifier(
+            num_electrodes=62, in_channels=5, num_classes=NUM_CLASSES)
+    elif model_type == "pgcn":
+        from pgcn_downstream import PGCNClassifier
+        model = PGCNClassifier(
+            num_electrodes=62, in_channels=5, num_classes=NUM_CLASSES,
+            dropout=dropout)
     else:
         raise ValueError(f"Unknown model: {model_type}")
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -200,6 +209,17 @@ def _train_and_select(train_data, train_labels, test_data, test_labels,
                       model_type="dgcnn", epochs=200, batch_size=256,
                       lr=3e-4, dropout=0.5, verbose=True,
                       val_interval=1, patience=30, label_smoothing=0.0):
+    if model_type == "pgcn":
+        from pgcn_downstream import train_pgcn
+        return train_pgcn(
+            train_data, train_labels, test_data, test_labels,
+            selection_data, selection_labels, device,
+            epochs=epochs, batch_size=batch_size, lr=lr,
+            dropout=dropout, verbose=verbose,
+            val_interval=val_interval, patience=patience,
+            label_smoothing=label_smoothing, num_classes=NUM_CLASSES,
+        )
+
     X_tr = torch.from_numpy(train_data).float()
     y_tr = torch.from_numpy(train_labels).long()
     X_selection = torch.from_numpy(selection_data).float()
@@ -226,7 +246,10 @@ def _train_and_select(train_data, train_labels, test_data, test_labels,
         model.train()
         for xb, yb in loader:
             xb, yb = xb.to(device), yb.to(device)
-            loss = criterion(model(xb), yb)
+            logits = model(xb)
+            loss = criterion(logits, yb)
+            if hasattr(model, "regularization_loss"):
+                loss = loss + model.regularization_loss()
             optimizer.zero_grad(); loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -412,7 +435,7 @@ def main():
     parser.add_argument("--mode", type=str, default="diagnose",
                         choices=["diagnose", "compare"])
     parser.add_argument("--model", type=str, default="dgcnn",
-                        choices=["dgcnn"])
+                        choices=["dgcnn", "gcbnet", "pgcn"])
     parser.add_argument("--real_only", action="store_true",
                         help="只用真实数据评估")
     parser.add_argument("--baseline", action="store_true",
