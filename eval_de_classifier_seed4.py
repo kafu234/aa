@@ -141,61 +141,6 @@ class DGCNN(nn.Module):
 
 
 # ============================================================
-#  DE Transformer Classifier
-# ============================================================
-
-def _get_seed_62_coords():
-    coords = torch.tensor([
-        [-0.0294, 0.0839,-0.0070],[ 0.0001, 0.0882,-0.0017],[ 0.0299, 0.0849,-0.0071],
-        [-0.0337, 0.0768, 0.0212],[ 0.0357, 0.0777, 0.0220],[-0.0703, 0.0425,-0.0114],
-        [-0.0645, 0.0480, 0.0169],[-0.0502, 0.0531, 0.0422],[-0.0275, 0.0569, 0.0603],
-        [ 0.0003, 0.0585, 0.0665],[ 0.0295, 0.0576, 0.0595],[ 0.0518, 0.0543, 0.0408],
-        [ 0.0679, 0.0498, 0.0164],[ 0.0730, 0.0444,-0.0120],[-0.0808, 0.0141,-0.0111],
-        [-0.0772, 0.0186, 0.0245],[-0.0602, 0.0227, 0.0555],[-0.0341, 0.0260, 0.0800],
-        [ 0.0004, 0.0274, 0.0887],[ 0.0348, 0.0264, 0.0788],[ 0.0623, 0.0237, 0.0556],
-        [ 0.0795, 0.0199, 0.0244],[ 0.0818, 0.0154,-0.0113],[-0.0842,-0.0160,-0.0093],
-        [-0.0803,-0.0138, 0.0292],[-0.0654,-0.0116, 0.0644],[-0.0362,-0.0100, 0.0898],
-        [ 0.0004,-0.0092, 0.1002],[ 0.0377,-0.0096, 0.0884],[ 0.0671,-0.0109, 0.0636],
-        [ 0.0835,-0.0128, 0.0292],[ 0.0851,-0.0150,-0.0095],[-0.0848,-0.0460,-0.0071],
-        [-0.0796,-0.0466, 0.0309],[-0.0636,-0.0470, 0.0656],[-0.0355,-0.0473, 0.0913],
-        [ 0.0004,-0.0473, 0.0994],[ 0.0384,-0.0471, 0.0907],[ 0.0666,-0.0466, 0.0656],
-        [ 0.0833,-0.0461, 0.0312],[ 0.0855,-0.0455,-0.0071],[-0.0724,-0.0735,-0.0025],
-        [-0.0673,-0.0763, 0.0284],[-0.0530,-0.0788, 0.0559],[-0.0286,-0.0805, 0.0754],
-        [ 0.0003,-0.0811, 0.0826],[ 0.0319,-0.0805, 0.0767],[ 0.0557,-0.0786, 0.0566],
-        [ 0.0679,-0.0759, 0.0281],[ 0.0731,-0.0731,-0.0025],[-0.0548,-0.0975, 0.0028],
-        [-0.0484,-0.0993, 0.0216],[-0.0365,-0.1009, 0.0372],[ 0.0002,-0.1022, 0.0506],
-        [ 0.0368,-0.1008, 0.0364],[ 0.0498,-0.0994, 0.0217],[ 0.0557,-0.0976, 0.0027],
-        [-0.0421,-0.1204, 0.0008],[-0.0294,-0.1124, 0.0088],[ 0.0001,-0.1149, 0.0147],
-        [ 0.0298,-0.1122, 0.0088],[ 0.0428,-0.1202, 0.0008],
-    ], dtype=torch.float32)
-    return coords
-
-
-class DETransformer(nn.Module):
-    def __init__(self, n_channels=62, n_bands=5, d_model=128,
-                 n_heads=4, n_layers=3, dropout=0.3, num_classes=NUM_CLASSES):
-        super().__init__()
-        self.band_embed = nn.Sequential(
-            nn.Linear(n_bands, d_model), nn.GELU(), nn.LayerNorm(d_model))
-        coords = _get_seed_62_coords()
-        self.register_buffer('coords', coords)
-        self.spatial_proj = nn.Sequential(
-            nn.Linear(3, d_model), nn.GELU(), nn.Linear(d_model, d_model))
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=n_heads, dim_feedforward=d_model * 4,
-            dropout=dropout, activation='gelu', batch_first=True)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-        self.head = nn.Sequential(
-            nn.LayerNorm(d_model), nn.Dropout(dropout), nn.Linear(d_model, num_classes))
-
-    def forward(self, x):
-        h = self.band_embed(x)
-        h = h + self.spatial_proj(self.coords).unsqueeze(0)
-        h = self.transformer(h)
-        return self.head(h.mean(dim=1))
-
-
-# ============================================================
 #  数据加载
 # ============================================================
 
@@ -243,8 +188,6 @@ def build_model(model_type, dropout=0.5, device="cpu"):
     if model_type == "dgcnn":
         model = DGCNN(num_electrodes=62, in_channels=5, num_classes=NUM_CLASSES,
                        k=2, dropout_rate=dropout)
-    elif model_type == "de_transformer":
-        model = DETransformer(dropout=dropout, num_classes=NUM_CLASSES)
     else:
         raise ValueError(f"Unknown model: {model_type}")
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -469,7 +412,7 @@ def main():
     parser.add_argument("--mode", type=str, default="diagnose",
                         choices=["diagnose", "compare"])
     parser.add_argument("--model", type=str, default="dgcnn",
-                        choices=["dgcnn", "de_transformer"])
+                        choices=["dgcnn"])
     parser.add_argument("--real_only", action="store_true",
                         help="只用真实数据评估")
     parser.add_argument("--baseline", action="store_true",

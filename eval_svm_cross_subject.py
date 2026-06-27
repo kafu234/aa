@@ -1,4 +1,4 @@
-"""Linear SVM LOSO evaluation for SEED DE features."""
+"""Sample-level Linear SVM LOSO evaluation for SEED DE features."""
 
 import argparse
 
@@ -27,7 +27,8 @@ def balanced_subset(data, labels, count, seed):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Linear SVM cross-subject DE evaluation")
+    parser = argparse.ArgumentParser(
+        description="Sample-level Linear SVM cross-subject DE evaluation")
     parser.add_argument("--data_root", required=True)
     parser.add_argument("--test_subject", type=int, required=True)
     parser.add_argument("--synthetic_path", default=None)
@@ -58,7 +59,8 @@ def main():
     train_x = train_x.reshape(len(train_x), -1)
     target_x = target_x.reshape(len(target_x), -1)
 
-    print(f"[SVM] method={method}, train={len(train_y)}, test={len(target_y)}, "
+    print(f"[SVM] metric=sample_level_no_trial_voting, method={method}, "
+          f"train={len(train_y)}, test={len(target_y)}, "
           f"features={train_x.shape[1]}, C={args.C}, max_iter={args.max_iter}")
     print(f"  Train labels: {dict(zip(*np.unique(train_y, return_counts=True)))}")
     print(f"  Test  labels: {dict(zip(*np.unique(target_y, return_counts=True)))}")

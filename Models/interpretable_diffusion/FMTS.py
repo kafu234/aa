@@ -18,7 +18,7 @@ class GuidanceClassifier(nn.Module):
     """
     可微分的 DE 分类器, 用于 Classifier Guidance.
 
-    与 eval 里的 DEClassifier 区别:
+    作为训练时的内部引导分类器:
       - DE 提取 **没有** @torch.no_grad(), 梯度能回传到生成器
       - 结构更轻量 (2层, d=64), 减少额外计算开销
       - 预训练后冻结, 只做 "裁判" 不参与更新
