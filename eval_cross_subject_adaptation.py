@@ -53,6 +53,8 @@ def main():
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--n_runs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=1024)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--dropout", type=float, default=0.5)
     parser.add_argument("--val_interval", type=int, default=1)
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--gpu", type=int, default=0)
@@ -127,7 +129,8 @@ def main():
             result = train_and_evaluate(
                 train_x, train_y, target_x, target_y, device,
                 model_type=args.model, epochs=args.epochs,
-                batch_size=args.batch_size, verbose=False,
+                batch_size=args.batch_size, lr=args.lr,
+                dropout=args.dropout, verbose=False,
                 val_interval=args.val_interval, patience=args.patience,
             )
             accs.append(result["accuracy"])
