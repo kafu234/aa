@@ -32,21 +32,28 @@ from torch.utils.data import DataLoader, Subset
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from Models.interpretable_diffusion.FMTS import FM_TS
-from Models.interpretable_diffusion.model_utils import unnormalize_to_zero_to_one
+from Models.interpretable_diffusion.model_utils import (
+    unnormalize_to_zero_to_one,
+    build_data_driven_graph,
+)
 from Utils.Data_utils.seed4_dataset import SEEDIVDataset as SEEDDataset, print_dataset_stats, NUM_CLASSES, LABEL_NAMES
 from Utils.Data_utils.group_split import group_holdout, stratified_group_holdout
 
 
 class SimpleEMA:
-    def __init__(self, model, decay=0.995):
+    def __init__(self, model, decay=0.995, warmup_steps=0):
         self.decay = decay
+        self.warmup_steps = warmup_steps
         self.shadow = deepcopy(model)
         self.shadow.eval()
         for p in self.shadow.parameters():
             p.requires_grad_(False)
 
     @torch.no_grad()
-    def update(self, model):
+    def update(self, model, step):
+        if step <= self.warmup_steps:
+            self.shadow.load_generator_state_dict(model.generator_state_dict())
+            return
         for s_param, m_param in zip(self.shadow.parameters(), model.parameters()):
             s_param.data.mul_(self.decay).add_(m_param.data, alpha=1.0 - self.decay)
 
@@ -80,7 +87,11 @@ class SEEDTrainer:
             self.optimizer, mode="min", factor=0.5, patience=500, verbose=True)
 
         ema_cfg = solver_cfg.get("ema", {})
-        self.ema = SimpleEMA(model, decay=ema_cfg.get("decay", 0.995))
+        self.ema = SimpleEMA(
+            model,
+            decay=ema_cfg.get("decay", 0.995),
+            warmup_steps=ema_cfg.get("warmup_steps", 0),
+        )
         self.ema_update_every = ema_cfg.get("update_interval", 10)
 
         self.results_dir = Path(args.results_dir)
@@ -204,7 +215,7 @@ class SEEDTrainer:
 
                 self.step += 1
                 if self.step % self.ema_update_every == 0:
-                    self.ema.update(self.model)
+                    self.ema.update(self.model, self.step)
 
                 pbar.set_description(f"loss: {total_loss:.6f}")
                 pbar.update(1)
@@ -253,8 +264,16 @@ class SEEDTrainer:
 
     def load(self, path):
         data = torch.load(path, map_location=self.device)
-        missing, unexpected = self.model.load_generator_state_dict(data["model"])
-        self.ema.shadow.load_generator_state_dict(data["ema"])
+        try:
+            missing, unexpected = self.model.load_generator_state_dict(data["model"])
+            self.ema.shadow.load_generator_state_dict(data["ema"])
+        except RuntimeError as exc:
+            if "size mismatch" in str(exc):
+                raise RuntimeError(
+                    "Checkpoint shape mismatch: model dimensions do not match "
+                    "the current SEED-IV DE configuration."
+                ) from exc
+            raise
         try:
             self.optimizer.load_state_dict(data["optimizer"])
         except Exception:
@@ -348,8 +367,158 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
+GRAPH_DEFAULTS = {
+    "graph_topk": 6,
+    "graph_dropedge": 0.1,
+    "graph_bias_layers": 2,
+    "graph_gate_init": -4.0,
+    "target_graph_weight": 0.3,
+}
+
+
+def _resolve_graph_config(config, args):
+    graph_cfg = dict(GRAPH_DEFAULTS)
+    graph_cfg.update(config.get("graph", {}))
+    for key in GRAPH_DEFAULTS:
+        if key in config:
+            graph_cfg[key] = config[key]
+
+    for key in ("graph_topk", "graph_bias_layers"):
+        value = getattr(args, key)
+        if value is not None:
+            graph_cfg[key] = int(value)
+        else:
+            graph_cfg[key] = int(graph_cfg[key])
+
+    for key in ("graph_dropedge", "graph_gate_init", "target_graph_weight"):
+        value = getattr(args, key)
+        if value is not None:
+            graph_cfg[key] = float(value)
+        else:
+            graph_cfg[key] = float(graph_cfg[key])
+
+    graph_cfg["graph_topk"] = max(1, graph_cfg["graph_topk"])
+    graph_cfg["graph_bias_layers"] = max(1, graph_cfg["graph_bias_layers"])
+    graph_cfg["graph_dropedge"] = float(np.clip(graph_cfg["graph_dropedge"], 0.0, 1.0))
+    graph_cfg["target_graph_weight"] = float(np.clip(graph_cfg["target_graph_weight"], 0.0, 1.0))
+    return graph_cfg
+
+
+def _graph_available(A):
+    if A is None:
+        return False
+    if not torch.is_tensor(A):
+        A = torch.as_tensor(A)
+    return bool(torch.count_nonzero(A).item() > 0)
+
+
+def _graph_stats(A):
+    if A is None or not _graph_available(A):
+        return 100.0, 0.0
+    A = A.detach().float().cpu()
+    n = A.shape[0]
+    off_diag = ~torch.eye(n, dtype=torch.bool)
+    edges = A[off_diag]
+    nonzero = edges[edges > 0]
+    density = nonzero.numel() / max(edges.numel(), 1)
+    sparsity = 100.0 * (1.0 - density)
+    mean_weight = float(nonzero.mean().item()) if nonzero.numel() > 0 else 0.0
+    return sparsity, mean_weight
+
+
+def _set_graph_on_trainer(trainer, method_name, *args, **kwargs):
+    getattr(trainer.model, method_name)(*args, **kwargs)
+    getattr(trainer.ema.shadow, method_name)(*args, **kwargs)
+
+
+def _load_anchor_graph_data(anchor_bundle):
+    if anchor_bundle is None or "data" not in anchor_bundle.files:
+        return None
+    return np.clip(anchor_bundle["data"] / 5.0, -1.0, 1.0).astype(np.float32)
+
+
+def _build_source_train_samples(ds_cfg):
+    source_cfg = deepcopy(ds_cfg)
+    source_cfg["period"] = "train"
+    source_dataset = SEEDDataset(**source_cfg)
+    return np.asarray(source_dataset.samples, dtype=np.float32)
+
+
+def configure_graph_bias(trainer, args, ds_cfg, graph_cfg, anchor_bundle=None):
+    source_graph = None
+    target_graph = None
+    graph_source = "source_train"
+    source_available = False
+    target_available = False
+
+    if _graph_available(trainer.model.source_graph_matrix):
+        source_graph = trainer.model.source_graph_matrix.detach().cpu()
+        source_available = True
+    else:
+        try:
+            if getattr(args, "use_test_period", False):
+                source_samples = _build_source_train_samples(ds_cfg)
+            else:
+                source_samples = np.asarray(trainer._train_samples, dtype=np.float32)
+            source_graph = build_data_driven_graph(
+                source_samples,
+                topk=graph_cfg["graph_topk"],
+                abs_corr=True,
+            )
+            source_available = _graph_available(source_graph)
+        except Exception as exc:
+            raise RuntimeError("failed to build the mandatory source graph") from exc
+    if not source_available:
+        raise RuntimeError("mandatory source graph is empty")
+
+    if getattr(args, "finetune", False) and anchor_bundle is not None:
+        try:
+            anchor_x = _load_anchor_graph_data(anchor_bundle)
+            if anchor_x is not None:
+                target_graph = build_data_driven_graph(
+                    anchor_x,
+                    topk=graph_cfg["graph_topk"],
+                    abs_corr=True,
+                )
+                target_available = _graph_available(target_graph)
+        except Exception as exc:
+            raise RuntimeError("failed to build the mandatory target graph") from exc
+        if not target_available:
+            raise RuntimeError("mandatory target graph is empty")
+
+    if target_available:
+        _set_graph_on_trainer(
+            trainer,
+            "set_mixed_graph",
+            source_graph,
+            target_graph,
+            target_graph_weight=graph_cfg["target_graph_weight"],
+        )
+        graph_source = "source_target_mix"
+    else:
+        _set_graph_on_trainer(trainer, "set_source_graph", source_graph)
+
+    active_graph = trainer.model.graph_bias_matrix
+    sparsity, mean_weight = _graph_stats(active_graph)
+    gate_sigmoid = float(torch.sigmoid(torch.tensor(graph_cfg["graph_gate_init"])).item())
+
+    print("Graph bias enabled: True (mandatory)")
+    print("Dual graph mode: automatic when target anchors are available")
+    print(f"Graph top-k: {graph_cfg['graph_topk']}")
+    print(f"Graph DropEdge: {graph_cfg['graph_dropedge']}")
+    print(f"Graph bias layers: {graph_cfg['graph_bias_layers']}")
+    print(f"Graph gate init: {graph_cfg['graph_gate_init']}")
+    print(f"Source graph available: {source_available}")
+    print(f"Target graph available: {target_available}")
+    print(f"Graph source: {graph_source}")
+    print(f"Target graph weight: {graph_cfg['target_graph_weight']}")
+    print(f"Graph sparsity: {sparsity:.2f}%")
+    print(f"Graph mean edge weight: {mean_weight:.6f}")
+    print(f"Graph gate initial sigmoid: {gate_sigmoid:.6f}")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Train FM-TS on SEED dataset")
+    parser = argparse.ArgumentParser(description="Train FM-TS on SEED-IV dataset")
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--max_epochs", type=int, default=None)
@@ -359,6 +528,14 @@ def main():
     parser.add_argument("--sample_only", action="store_true")
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--num_samples", type=int, default=0)
+    parser.add_argument(
+        "--subjects", type=str, default=None,
+        help="comma-separated subject IDs to load",
+    )
+    parser.add_argument(
+        "--all_subjects", type=str, default=None,
+        help="comma-separated LOSO subject pool; test_subject is excluded by the split",
+    )
     parser.add_argument("--sample_mode", type=str, default="full",
                         choices=["full", "anchored"],
                         help="生成方式: full=纯噪声起步, anchored=同类真实样本附近起步")
@@ -390,6 +567,11 @@ def main():
                         help="train/checkpoint only; do not generate samples")
     parser.add_argument("--anchor_bundle", type=str, default=None,
                         help="pseudo-labeled target anchors (.npz); labels must not be target ground truth")
+    parser.add_argument("--graph_topk", type=int, default=None)
+    parser.add_argument("--graph_dropedge", type=float, default=None)
+    parser.add_argument("--graph_bias_layers", type=int, default=None)
+    parser.add_argument("--graph_gate_init", type=float, default=None)
+    parser.add_argument("--target_graph_weight", type=float, default=None)
     # === 改动2: 新增参数 ===
     parser.add_argument("--unlabeled_finetune", action="store_true",
                         help="无标签微调: 加载条件模型但训练时不传标签, "
@@ -400,6 +582,8 @@ def main():
                         help="明确允许使用无标签测试数据适配；普通泛化实验禁止启用")
     args = parser.parse_args()
 
+    if args.subjects is not None and args.all_subjects is not None:
+        parser.error("--subjects and --all_subjects are mutually exclusive")
     if args.use_test_period:
         if not args.unlabeled_finetune or not args.allow_transductive_test_adaptation:
             parser.error(
@@ -417,6 +601,9 @@ def main():
     print(f"Using device: {device}")
 
     config = load_config(args.config)
+    if args.target_graph_weight is not None and not (0.0 <= args.target_graph_weight <= 1.0):
+        parser.error("--target_graph_weight must be in [0, 1]")
+    graph_cfg = _resolve_graph_config(config, args)
 
     os.environ.setdefault("hucfg_num_steps", "100")
     os.environ.setdefault("hucfg_t_sampling", "logitnorm")
@@ -434,6 +621,15 @@ def main():
 
     ds_cfg["period"] = "test" if args.use_test_period else "train"
     ds_cfg["split_mode"] = args.split_mode
+    subject_pool = args.subjects if args.subjects is not None else args.all_subjects
+    if subject_pool is not None:
+        ds_cfg["subjects"] = [
+            int(value.strip()) for value in subject_pool.split(",")
+            if value.strip()
+        ]
+        if not ds_cfg["subjects"]:
+            parser.error("subject list cannot be empty")
+        print(f"[Subjects] loading subject pool: {ds_cfg['subjects']}")
     if args.subject is not None and args.split_mode != "subject":
         ds_cfg["subjects"] = [args.subject]
         print(f"[被试 {args.subject}] 只使用该被试的数据")
@@ -479,6 +675,9 @@ def main():
               f"condition_margin_batch={args.condition_margin_batch}")
     else:
         model_cfg["num_classes"] = 0
+    model_cfg["graph_dropedge"] = graph_cfg["graph_dropedge"]
+    model_cfg["graph_bias_layers"] = graph_cfg["graph_bias_layers"]
+    model_cfg["graph_gate_init"] = graph_cfg["graph_gate_init"]
 
     print(f"Model config: seq_length={model_cfg['seq_length']}, feature_size={model_cfg['feature_size']}")
     model = FM_TS(**model_cfg).to(device)
@@ -489,6 +688,7 @@ def main():
         args.results_dir = f"./results/{ds_cfg.get('name', 'SEED')}"
 
     trainer = SEEDTrainer(model, train_loader, config, args)
+    anchor_bundle = None
     if args.anchor_bundle is not None:
         anchor_bundle = np.load(args.anchor_bundle)
         trainer._train_samples = np.clip(
@@ -507,6 +707,8 @@ def main():
             trainer.best_val = float("inf")   # FIX #1
             trainer.val_ema = None
             print(f"[Finetune] 重置训练步数: step=0, max_epochs={trainer.max_epochs}")
+
+    configure_graph_bias(trainer, args, ds_cfg, graph_cfg, anchor_bundle=anchor_bundle)
 
     # === Guidance Classifier: 必须在 checkpoint 加载之后, 避免被覆盖 ===
     # FIX #4: sample_only 时采样路径用 CFG, 不需要 guidance classifier。

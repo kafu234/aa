@@ -129,6 +129,9 @@ class FM_TS(nn.Module):
         self.condition_margin = condition_margin
         self.condition_margin_max_t = condition_margin_max_t
         self.condition_margin_batch = condition_margin_batch
+        # Data-driven graph bias is a permanent part of FM-TS.
+        kwargs["graph_bias_layers"] = max(
+            1, int(kwargs.get("graph_bias_layers", 2)))
         self.register_buffer("graph_bias_matrix", torch.zeros(seq_length, seq_length))
         self.register_buffer("source_graph_matrix", torch.zeros(seq_length, seq_length))
         self.register_buffer("target_graph_matrix", torch.zeros(seq_length, seq_length))

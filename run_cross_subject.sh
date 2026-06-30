@@ -6,8 +6,6 @@ export PYTHONUNBUFFERED=1
 
 DATASET=${DATASET:-seed}                 # seed or seed4
 GPU=${GPU:-0}
-SOURCE_EPOCHS=${SOURCE_EPOCHS:-10000}
-ADAPT_EPOCHS=${ADAPT_EPOCHS:-1000}
 SCORER_EPOCHS=${SCORER_EPOCHS:-200}
 SCORER_BATCH_SIZE=${SCORER_BATCH_SIZE:-8192}
 SCORER_LABEL_SMOOTHING=${SCORER_LABEL_SMOOTHING:-0.0}
@@ -20,7 +18,7 @@ SCORE_RUNS=${SCORE_RUNS:-3}
 EVAL_EPOCHS=${EVAL_EPOCHS:-200}
 N_RUNS=${N_RUNS:-5}
 EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-4096}
-PSEUDO_THRESHOLD=${PSEUDO_THRESHOLD:-0.8}
+PSEUDO_THRESHOLD=${PSEUDO_THRESHOLD:-0.9}
 PSEUDO_MIN_AGREEMENT=${PSEUDO_MIN_AGREEMENT:-0.67}
 PSEUDO_MIN_PER_CLASS=${PSEUDO_MIN_PER_CLASS:-100}
 PSEUDO_MAX_PER_CLASS=${PSEUDO_MAX_PER_CLASS:-1000}
@@ -34,20 +32,35 @@ SYN_RATIO=${SYN_RATIO:-0.10}
 NUM_SYNTHETIC=${NUM_SYNTHETIC:-30000}
 ANCHOR_T_START=${ANCHOR_T_START:-0.45}
 CLASSIFIER_WEIGHT=${CLASSIFIER_WEIGHT:-0.1}
+GRAPH_TOPK=${GRAPH_TOPK:-6}
+GRAPH_DROPEDGE=${GRAPH_DROPEDGE:-0.1}
+GRAPH_BIAS_LAYERS=${GRAPH_BIAS_LAYERS:-2}
+GRAPH_GATE_INIT=${GRAPH_GATE_INIT:--4.0}
+TARGET_GRAPH_WEIGHT=${TARGET_GRAPH_WEIGHT:-0.3}
 RUN_SOURCE=${RUN_SOURCE:-1}
 RUN_PSEUDO=${RUN_PSEUDO:-1}
 RUN_ADAPT=${RUN_ADAPT:-1}
 RUN_EVAL=${RUN_EVAL:-1}
 
 if [ "$DATASET" = "seed4" ]; then
+    SOURCE_EPOCHS=${SOURCE_EPOCHS:-2500}
+    ADAPT_EPOCHS=${ADAPT_EPOCHS:-250}
     DATA_ROOT=${DATA_ROOT:-/root/autodl-tmp/eeg_feature_smooth}
     CONFIG=${CONFIG:-./Config/seed4_de_gen.yaml}
     TRAIN_SCRIPT=train_seed4.py
 else
+    SOURCE_EPOCHS=${SOURCE_EPOCHS:-10000}
+    ADAPT_EPOCHS=${ADAPT_EPOCHS:-1000}
     DATA_ROOT=${DATA_ROOT:-/root/autodl-tmp/ExtractedFeatures}
     CONFIG=${CONFIG:-./Config/seed_de_gen_full.yaml}
     TRAIN_SCRIPT=train_seed.py
 fi
+
+GRAPH_ARGS=(--graph_topk "$GRAPH_TOPK")
+GRAPH_ARGS+=(--graph_dropedge "$GRAPH_DROPEDGE")
+GRAPH_ARGS+=(--graph_bias_layers "$GRAPH_BIAS_LAYERS")
+GRAPH_ARGS+=(--graph_gate_init "$GRAPH_GATE_INIT")
+GRAPH_ARGS+=(--target_graph_weight "$TARGET_GRAPH_WEIGHT")
 
 RESULT_ROOT=${RESULT_ROOT:-/root/autodl-tmp/results/${DATASET}_cross_subject_adaptation}
 SUBJECTS=${SUBJECTS:-"1 2 3 4 5 6 7 8 9 10 11 12 13 14 15"}
@@ -58,6 +71,8 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 
 echo "Run started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "Log file: ${LOG_FILE}"
+echo "SOURCE_EPOCHS=${SOURCE_EPOCHS}; ADAPT_EPOCHS=${ADAPT_EPOCHS}; PSEUDO_THRESHOLD=${PSEUDO_THRESHOLD}"
+echo "Graph bias: mandatory; dual graph: automatic with target anchors; ${GRAPH_ARGS[*]}"
 echo "NUM_SYNTHETIC=${NUM_SYNTHETIC}; PSEUDO_RATIO=${PSEUDO_RATIO}; SYN_RATIO=${SYN_RATIO}"
 echo "SCORER_BATCH_SIZE=${SCORER_BATCH_SIZE}; SCORER_LABEL_SMOOTHING=${SCORER_LABEL_SMOOTHING}; SCORER_TEMPERATURE_CALIBRATION=${SCORER_TEMPERATURE_CALIBRATION}; EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE}"
 echo "Generator and final evaluation use all source subjects; scorer calibration is controlled separately"
@@ -74,6 +89,7 @@ for SUBJ in $SUBJECTS; do
     if [ "$RUN_SOURCE" = "1" ]; then
         python ${TRAIN_SCRIPT} --config ${CONFIG} --gpu ${GPU} \
             --conditional --classifier_weight ${CLASSIFIER_WEIGHT} \
+            "${GRAPH_ARGS[@]}" \
             --split_mode subject --test_subject ${SUBJ} \
             --no_validation \
             --max_epochs ${SOURCE_EPOCHS} \
@@ -96,7 +112,8 @@ for SUBJ in $SUBJECTS; do
 
     if [ "$RUN_ADAPT" = "1" ]; then
         python ${TRAIN_SCRIPT} --config ${CONFIG} --gpu ${GPU} \
-            --conditional --split_mode subject --test_subject ${SUBJ} \
+            --conditional "${GRAPH_ARGS[@]}" \
+            --split_mode subject --test_subject ${SUBJ} \
             --no_validation \
             --checkpoint ${BASE_DIR}/checkpoint-last.pt \
             --finetune --max_epochs ${ADAPT_EPOCHS} \

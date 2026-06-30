@@ -49,7 +49,7 @@ def _zero_graph(n_channel, dtype=torch.float32, device=None):
     return torch.zeros((n_channel, n_channel), dtype=dtype, device=device)
 
 
-def build_data_driven_graph(x, topk=6, abs_corr=True, sample_weight=None, eps=1e-6):
+def build_data_driven_graph(x, topk=6, abs_corr=True, eps=1e-6):
     """
     Build a sparse channel graph from EEG samples by Pearson correlation.
 
@@ -57,7 +57,6 @@ def build_data_driven_graph(x, topk=6, abs_corr=True, sample_weight=None, eps=1e
         x: numpy array or tensor with shape [N, C, F].
         topk: number of neighbors kept for each channel.
         abs_corr: use absolute correlation values when True.
-        sample_weight: optional [N] weights for confidence-weighted target anchors.
         eps: numerical stability constant.
 
     Returns:
@@ -76,21 +75,8 @@ def build_data_driven_graph(x, topk=6, abs_corr=True, sample_weight=None, eps=1e
         n_sample, n_channel, n_feat = x_t.shape
         flat = x_t.permute(1, 0, 2).reshape(n_channel, n_sample * n_feat)
 
-        if sample_weight is not None:
-            w = torch.as_tensor(sample_weight, dtype=torch.float32).flatten().cpu()
-            if w.numel() != n_sample:
-                return _zero_graph(n_channel)
-            w = torch.nan_to_num(w, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
-            if float(w.sum()) <= eps:
-                return _zero_graph(n_channel)
-            w = w.repeat_interleave(n_feat)
-            w_sum = w.sum().clamp_min(eps)
-            mean = (flat * w.unsqueeze(0)).sum(dim=1, keepdim=True) / w_sum
-            centered = flat - mean
-            cov = (centered * w.unsqueeze(0)) @ centered.t() / w_sum
-        else:
-            centered = flat - flat.mean(dim=1, keepdim=True)
-            cov = centered @ centered.t() / max(flat.shape[1] - 1, 1)
+        centered = flat - flat.mean(dim=1, keepdim=True)
+        cov = centered @ centered.t() / max(flat.shape[1] - 1, 1)
 
         var = torch.diag(cov).clamp_min(0.0)
         if torch.count_nonzero(var > eps).item() < 2:

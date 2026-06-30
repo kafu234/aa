@@ -389,14 +389,11 @@ def load_config(path):
 
 
 GRAPH_DEFAULTS = {
-    "use_graph_bias": False,
     "graph_topk": 6,
     "graph_dropedge": 0.1,
     "graph_bias_layers": 2,
     "graph_gate_init": -4.0,
-    "use_dual_graph": True,
     "target_graph_weight": 0.3,
-    "use_confidence_weighted_target_graph": True,
 }
 
 
@@ -406,13 +403,6 @@ def _resolve_graph_config(config, args):
     for key in GRAPH_DEFAULTS:
         if key in config:
             graph_cfg[key] = config[key]
-
-    for key in ("use_graph_bias", "use_dual_graph", "use_confidence_weighted_target_graph"):
-        value = getattr(args, key)
-        if value is not None:
-            graph_cfg[key] = bool(value)
-        else:
-            graph_cfg[key] = bool(graph_cfg[key])
 
     for key in ("graph_topk", "graph_bias_layers"):
         value = getattr(args, key)
@@ -428,8 +418,8 @@ def _resolve_graph_config(config, args):
         else:
             graph_cfg[key] = float(graph_cfg[key])
 
-    graph_cfg["graph_topk"] = max(0, graph_cfg["graph_topk"])
-    graph_cfg["graph_bias_layers"] = max(0, graph_cfg["graph_bias_layers"])
+    graph_cfg["graph_topk"] = max(1, graph_cfg["graph_topk"])
+    graph_cfg["graph_bias_layers"] = max(1, graph_cfg["graph_bias_layers"])
     graph_cfg["graph_dropedge"] = float(np.clip(graph_cfg["graph_dropedge"], 0.0, 1.0))
     graph_cfg["target_graph_weight"] = float(np.clip(graph_cfg["target_graph_weight"], 0.0, 1.0))
     return graph_cfg
@@ -462,17 +452,10 @@ def _set_graph_on_trainer(trainer, method_name, *args, **kwargs):
     getattr(trainer.ema.shadow, method_name)(*args, **kwargs)
 
 
-def _load_anchor_graph_inputs(anchor_bundle, use_confidence_weighted):
+def _load_anchor_graph_data(anchor_bundle):
     if anchor_bundle is None or "data" not in anchor_bundle.files:
-        return None, None
-    data = np.clip(anchor_bundle["data"] / 5.0, -1.0, 1.0).astype(np.float32)
-    sample_weight = None
-    if use_confidence_weighted and "confidence" in anchor_bundle.files and "agreement" in anchor_bundle.files:
-        sample_weight = (
-            anchor_bundle["confidence"].astype(np.float32)
-            * anchor_bundle["agreement"].astype(np.float32)
-        )
-    return data, sample_weight
+        return None
+    return np.clip(anchor_bundle["data"] / 5.0, -1.0, 1.0).astype(np.float32)
 
 
 def _build_source_train_samples(ds_cfg):
@@ -485,72 +468,63 @@ def _build_source_train_samples(ds_cfg):
 def configure_graph_bias(trainer, args, ds_cfg, graph_cfg, anchor_bundle=None):
     source_graph = None
     target_graph = None
-    graph_source = "disabled"
+    graph_source = "source_train"
     source_available = False
     target_available = False
 
-    if graph_cfg["use_graph_bias"]:
-        if _graph_available(trainer.model.source_graph_matrix):
-            source_graph = trainer.model.source_graph_matrix.detach().cpu()
-            source_available = True
-        else:
-            try:
-                if getattr(args, "use_test_period", False):
-                    source_samples = _build_source_train_samples(ds_cfg)
-                else:
-                    source_samples = np.asarray(trainer._train_samples, dtype=np.float32)
-                source_graph = build_data_driven_graph(
-                    source_samples,
+    if _graph_available(trainer.model.source_graph_matrix):
+        source_graph = trainer.model.source_graph_matrix.detach().cpu()
+        source_available = True
+    else:
+        try:
+            if getattr(args, "use_test_period", False):
+                source_samples = _build_source_train_samples(ds_cfg)
+            else:
+                source_samples = np.asarray(trainer._train_samples, dtype=np.float32)
+            source_graph = build_data_driven_graph(
+                source_samples,
+                topk=graph_cfg["graph_topk"],
+                abs_corr=True,
+            )
+            source_available = _graph_available(source_graph)
+        except Exception as exc:
+            raise RuntimeError("failed to build the mandatory source graph") from exc
+    if not source_available:
+        raise RuntimeError("mandatory source graph is empty")
+
+    if getattr(args, "finetune", False) and anchor_bundle is not None:
+        try:
+            anchor_x = _load_anchor_graph_data(anchor_bundle)
+            if anchor_x is not None:
+                target_graph = build_data_driven_graph(
+                    anchor_x,
                     topk=graph_cfg["graph_topk"],
                     abs_corr=True,
                 )
-                source_available = _graph_available(source_graph)
-            except Exception as exc:
-                print(f"[Graph] Warning: failed to build source graph: {exc}")
-                source_graph = None
+                target_available = _graph_available(target_graph)
+        except Exception as exc:
+            raise RuntimeError("failed to build the mandatory target graph") from exc
+        if not target_available:
+            raise RuntimeError("mandatory target graph is empty")
 
-        if (getattr(args, "finetune", False)
-                and graph_cfg["use_dual_graph"]
-                and anchor_bundle is not None):
-            try:
-                anchor_x, sample_weight = _load_anchor_graph_inputs(
-                    anchor_bundle,
-                    graph_cfg["use_confidence_weighted_target_graph"],
-                )
-                if anchor_x is not None:
-                    target_graph = build_data_driven_graph(
-                        anchor_x,
-                        topk=graph_cfg["graph_topk"],
-                        abs_corr=True,
-                        sample_weight=sample_weight,
-                    )
-                    target_available = _graph_available(target_graph)
-            except Exception as exc:
-                print(f"[Graph] Warning: failed to build target anchor graph: {exc}")
-                target_graph = None
+    if target_available:
+        _set_graph_on_trainer(
+            trainer,
+            "set_mixed_graph",
+            source_graph,
+            target_graph,
+            target_graph_weight=graph_cfg["target_graph_weight"],
+        )
+        graph_source = "source_target_mix"
+    else:
+        _set_graph_on_trainer(trainer, "set_source_graph", source_graph)
 
-        if source_available and target_available and graph_cfg["use_dual_graph"]:
-            _set_graph_on_trainer(
-                trainer,
-                "set_mixed_graph",
-                source_graph,
-                target_graph,
-                target_graph_weight=graph_cfg["target_graph_weight"],
-            )
-            graph_source = "source_target_mix"
-        elif source_graph is not None:
-            _set_graph_on_trainer(trainer, "set_source_graph", source_graph)
-            if getattr(args, "finetune", False) and anchor_bundle is not None:
-                graph_source = "source_train_fallback"
-            else:
-                graph_source = "source_train"
-
-    active_graph = trainer.model.graph_bias_matrix if graph_cfg["use_graph_bias"] else None
+    active_graph = trainer.model.graph_bias_matrix
     sparsity, mean_weight = _graph_stats(active_graph)
     gate_sigmoid = float(torch.sigmoid(torch.tensor(graph_cfg["graph_gate_init"])).item())
 
-    print(f"Graph bias enabled: {graph_cfg['use_graph_bias']}")
-    print(f"Use dual graph: {graph_cfg['use_dual_graph']}")
+    print("Graph bias enabled: True (mandatory)")
+    print("Dual graph mode: automatic when target anchors are available")
     print(f"Graph top-k: {graph_cfg['graph_topk']}")
     print(f"Graph DropEdge: {graph_cfg['graph_dropedge']}")
     print(f"Graph bias layers: {graph_cfg['graph_bias_layers']}")
@@ -559,7 +533,6 @@ def configure_graph_bias(trainer, args, ds_cfg, graph_cfg, anchor_bundle=None):
     print(f"Target graph available: {target_available}")
     print(f"Graph source: {graph_source}")
     print(f"Target graph weight: {graph_cfg['target_graph_weight']}")
-    print(f"Confidence weighted target graph: {graph_cfg['use_confidence_weighted_target_graph']}")
     print(f"Graph sparsity: {sparsity:.2f}%")
     print(f"Graph mean edge weight: {mean_weight:.6f}")
     print(f"Graph gate initial sigmoid: {gate_sigmoid:.6f}")
@@ -615,15 +588,11 @@ def main():
                         help="train/checkpoint only; do not generate samples")
     parser.add_argument("--anchor_bundle", type=str, default=None,
                         help="pseudo-labeled target anchors (.npz); labels must not be target ground truth")
-    parser.add_argument("--use_graph_bias", action="store_true", default=None,
-                        help="enable source/target graph-guided attention bias")
     parser.add_argument("--graph_topk", type=int, default=None)
     parser.add_argument("--graph_dropedge", type=float, default=None)
     parser.add_argument("--graph_bias_layers", type=int, default=None)
     parser.add_argument("--graph_gate_init", type=float, default=None)
-    parser.add_argument("--use_dual_graph", action="store_true", default=None)
     parser.add_argument("--target_graph_weight", type=float, default=None)
-    parser.add_argument("--use_confidence_weighted_target_graph", action="store_true", default=None)
     # === 改动2: 新增参数 ===
     parser.add_argument("--unlabeled_finetune", action="store_true",
                         help="无标签微调: 加载条件模型但训练时不传标签, "
@@ -727,7 +696,6 @@ def main():
               f"condition_margin_batch={args.condition_margin_batch}")
     else:
         model_cfg["num_classes"] = 0
-    model_cfg["use_graph_bias"] = graph_cfg["use_graph_bias"]
     model_cfg["graph_dropedge"] = graph_cfg["graph_dropedge"]
     model_cfg["graph_bias_layers"] = graph_cfg["graph_bias_layers"]
     model_cfg["graph_gate_init"] = graph_cfg["graph_gate_init"]

@@ -26,12 +26,18 @@ model:
 
 solver:
   base_lr: 1.0e-4            # 3e-4→1e-4 大模型用更小学习率
-  max_epochs: 10000           # 5000→10000 4类比3类更难, 充分训练
+  max_epochs: 2500            # 按 LOSO source 样本量对齐 SEED 的等效遍历次数
   gradient_accumulate_every: 2
   save_cycle: 1000
   ema:
     decay: 0.9995             # 0.995→0.9995 更平滑的EMA
     update_interval: 10
+
+graph_topk: 6
+graph_dropedge: 0.1
+graph_bias_layers: 2
+graph_gate_init: -4.0
+target_graph_weight: 0.3
 
 dataloader:
   train_dataset:

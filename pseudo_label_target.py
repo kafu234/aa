@@ -92,8 +92,7 @@ def select_pseudo_labels(probs, agreement, threshold, min_agreement, min_per_cla
         candidates = np.where(predictions == class_id)[0]
         if len(candidates) == 0:
             raise ValueError(f"source ensemble predicted no target samples for class {class_id}")
-        score = confidence[candidates] * agreement[candidates]
-        order = candidates[np.argsort(-score)]
+        order = candidates[np.argsort(-confidence[candidates])]
         high = order[(confidence[order] >= threshold) & (agreement[order] >= min_agreement)]
         if len(high) == 0:
             raise ValueError(
@@ -132,7 +131,7 @@ def main():
                         help="label smoothing used only while training pseudo-label scorers")
     parser.add_argument("--temperature_calibration", action="store_true",
                         help="train each scorer without one source subject and calibrate its temperature on that subject")
-    parser.add_argument("--threshold", type=float, default=0.8)
+    parser.add_argument("--threshold", type=float, default=0.9)
     parser.add_argument("--min_agreement", type=float, default=0.67)
     parser.add_argument("--min_per_class", type=int, default=100,
                         help="warn when a class has fewer reliable samples; never backfills")
