@@ -2,14 +2,15 @@
 set -euo pipefail
 
 DATA_ROOT="${DATA_ROOT:-/root/autodl-tmp/ExtractedFeatures}"
-SYN_ROOT="${SYN_ROOT:-/root/autodl-tmp/results/seed_eval_source_syn_knn_5runs}"
-OUT_DIR="${OUT_DIR:-/root/autodl-tmp/results/seed_dan_s2_s14_eval}"
+SYN_ROOT="${SYN_ROOT:-/root/autodl-tmp/results/seed_svm_graph_current_knn01_all15}"
+OUT_DIR="${OUT_DIR:-/root/autodl-tmp/results/seed_dan_graph_current_knn01_all15_sourceval}"
 GPU="${GPU:-0}"
 EPOCHS="${EPOCHS:-200}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
-PATIENCE="${PATIENCE:-10}"
+PATIENCE="${PATIENCE:-20}"
 VAL_INTERVAL="${VAL_INTERVAL:-1}"
-N_RUNS="${N_RUNS:-1}"
+N_RUNS="${N_RUNS:-5}"
+MODEL_SELECTION="${MODEL_SELECTION:-source_subject}"
 
 mkdir -p "${OUT_DIR}"
 
@@ -38,5 +39,6 @@ for subj in "$@"; do
     --gpu 0 \
     --patience "${PATIENCE}" \
     --val_interval "${VAL_INTERVAL}" \
+    --model_selection "${MODEL_SELECTION}" \
     2>&1 | tee "${log_path}"
 done

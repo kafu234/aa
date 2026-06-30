@@ -294,7 +294,7 @@ class SEEDIVDataset(Dataset):
         # ---- 标签范围检查 & 自动修正 ----
         unique_labels = sorted(np.unique(all_labels).tolist())
         label_min, label_max = unique_labels[0], unique_labels[-1]
-        print(f"[SEEDIVDataset-DE] Raw label values: {unique_labels} "
+        print(f"[SEEDIVDataset-DE] Original label values: {unique_labels} "
               f"(min={label_min}, max={label_max})")
 
         # 过滤掉 -1 (rest/baseline/transition 时段, 不是有效情绪类别)

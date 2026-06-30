@@ -144,9 +144,9 @@ def load_de_data(data_root, seed=42, split_mode="trial", subject=None,
     from Utils.Data_utils.seed_dataset import SEEDDataset
     subjects = [subject] if (subject is not None and split_mode != "subject") else None
     common = dict(
-        name="SEED_DE", data_root=data_root, data_type="de",
+        name="SEED_DE", data_root=data_root,
         de_key_prefix="de_LDS", window=1, proportion=1.0, seed=seed,
-        conditional=True, sfreq=200, split_mode=split_mode, subjects=subjects,
+        conditional=True, split_mode=split_mode, subjects=subjects,
     )
     if train_trials is not None: common["train_trials"] = train_trials
     if test_trials is not None: common["test_trials"] = test_trials

@@ -97,7 +97,7 @@ PY
         RATIO_NAME=$(printf "%.3f" "${RATIO}" | sed 's/\./p/g')
 
         echo "------------------------------------------------------------"
-        echo "Subject ${SUBJ}, ratio=${RATIO}, raw synthetic"
+        echo "Subject ${SUBJ}, ratio=${RATIO}, unfiltered synthetic"
         echo "------------------------------------------------------------"
 
         python eval_cross_subject_adaptation.py \
@@ -113,7 +113,7 @@ PY
             --patience "${EVAL_PATIENCE}" \
             --gpu "${GPU}" \
             --seed 42 \
-            2>&1 | tee "${SUBJ_DIR}/raw_syn_r${RATIO_NAME}.log"
+            2>&1 | tee "${SUBJ_DIR}/unfiltered_syn_r${RATIO_NAME}.log"
 
         KNN_FILE="${KNN_DIR}/generated_anchor_ranked_r${RATIO_NAME}.npz"
 

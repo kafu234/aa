@@ -138,8 +138,10 @@ class SEEDTrainer:
         n_val = len(val_idx)
 
         self.val_x = torch.from_numpy(x_all[val_idx]).float().to(self.device)
-        self.val_y = (torch.from_numpy(y_all[val_idx]).long().to(self.device)
-                      if (self._use_labels and y_all is not None) else None)
+        self.val_y = (
+            torch.from_numpy(y_all[val_idx]).long().to(self.device)
+            if (self._use_labels and y_all is not None) else None
+        )
 
         # 训练集 + anchored 采样都只用 train_idx (已剔除验证样本)
         self._train_samples = x_all[train_idx]
@@ -280,8 +282,16 @@ class SEEDTrainer:
 
     def load(self, path):
         data = torch.load(path, map_location=self.device)
-        missing, unexpected = self.model.load_generator_state_dict(data["model"])
-        self.ema.shadow.load_generator_state_dict(data["ema"])
+        try:
+            missing, unexpected = self.model.load_generator_state_dict(data["model"])
+            self.ema.shadow.load_generator_state_dict(data["ema"])
+        except RuntimeError as exc:
+            if "size mismatch" in str(exc):
+                raise RuntimeError(
+                    "Checkpoint shape mismatch: model dimensions do not match "
+                    "the current DE configuration."
+                ) from exc
+            raise
         try:
             self.optimizer.load_state_dict(data["optimizer"])
         except Exception:
@@ -566,6 +576,14 @@ def main():
     parser.add_argument("--sample_only", action="store_true")
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--num_samples", type=int, default=0)
+    parser.add_argument(
+        "--subjects", type=str, default=None,
+        help="comma-separated subject IDs to load",
+    )
+    parser.add_argument(
+        "--all_subjects", type=str, default=None,
+        help="comma-separated LOSO subject pool; test_subject is excluded by the split",
+    )
     parser.add_argument("--sample_mode", type=str, default="full",
                         choices=["full", "anchored"],
                         help="生成方式: full=纯噪声起步, anchored=同类真实样本附近起步")
@@ -616,6 +634,8 @@ def main():
                         help="明确允许使用无标签测试数据适配；普通泛化实验禁止启用")
     args = parser.parse_args()
 
+    if args.subjects is not None and args.all_subjects is not None:
+        parser.error("--subjects and --all_subjects are mutually exclusive")
     if args.use_test_period:
         if not args.unlabeled_finetune or not args.allow_transductive_test_adaptation:
             parser.error(
@@ -653,6 +673,15 @@ def main():
 
     ds_cfg["period"] = "test" if args.use_test_period else "train"
     ds_cfg["split_mode"] = args.split_mode
+    subject_pool = args.subjects if args.subjects is not None else args.all_subjects
+    if subject_pool is not None:
+        ds_cfg["subjects"] = [
+            int(value.strip()) for value in subject_pool.split(",")
+            if value.strip()
+        ]
+        if not ds_cfg["subjects"]:
+            parser.error("subject list cannot be empty")
+        print(f"[Subjects] loading subject pool: {ds_cfg['subjects']}")
     if args.subject is not None and args.split_mode != "subject":
         ds_cfg["subjects"] = [args.subject]
         print(f"[被试 {args.subject}] 只使用该被试的数据")
@@ -716,7 +745,8 @@ def main():
     if args.anchor_bundle is not None:
         anchor_bundle = np.load(args.anchor_bundle)
         trainer._train_samples = np.clip(
-            anchor_bundle["data"] / 5.0, -1.0, 1.0).astype(np.float32)
+            anchor_bundle["data"] / 5.0, -1.0, 1.0
+        ).astype(np.float32)
         trainer._train_labels = anchor_bundle["labels"].astype(np.int64)
         missing_classes = sorted(set(range(model.num_classes)) - set(np.unique(trainer._train_labels)))
         if missing_classes:
@@ -794,13 +824,11 @@ def main():
         samples, labels = trainer.generate(
             num_gen, sample_mode=args.sample_mode, anchor_t_start=args.anchor_t_start)
 
-    CLIP_STD = 5.0
-    samples = samples * CLIP_STD
-
     save_dir = args.results_dir
     os.makedirs(save_dir, exist_ok=True)
     name = ds_cfg.get('name', 'SEED')
     win = train_dataset.window
+    samples = samples * 5.0
     bundle_path = os.path.join(save_dir, f"generated_{name}_{win}.npz")
     np.savez(bundle_path, data=samples, labels=labels)
 

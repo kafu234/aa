@@ -36,7 +36,6 @@ dataloader:
     params:
       name: SEED_DE_GEN
       data_root: /root/autodl-tmp/ExtractedFeatures
-      data_type: de                 # ← 加载官方DE特征
       de_key_prefix: de_LDS         # de_LDS1 ~ de_LDS15
       window: 1                     # DE模式下不使用, 占位
       proportion: 0.8

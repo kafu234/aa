@@ -41,7 +41,6 @@ dataloader:
     params:
       name: SEED_DE_GEN
       data_root: /root/autodl-tmp/ExtractedFeatures
-      data_type: de
       de_key_prefix: de_LDS
       window: 1
       proportion: 0.8

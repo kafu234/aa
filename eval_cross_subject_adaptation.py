@@ -7,11 +7,23 @@ import torch
 
 def get_api(dataset):
     if dataset == "seed4":
-        from eval_de_classifier_seed4 import load_de_data, load_synthetic_de, train_and_evaluate
-        return load_de_data, load_synthetic_de, train_and_evaluate, 4, [
+        from eval_de_classifier_seed4 import (
+            load_de_data, load_synthetic_de, train_and_evaluate,
+            train_with_validation,
+        )
+        return (
+            load_de_data, load_synthetic_de, train_and_evaluate,
+            train_with_validation, 4,
+        ), [
             "neutral", "sad", "fear", "happy"]
-    from eval_de_classifier import load_de_data, load_synthetic_de, train_and_evaluate
-    return load_de_data, load_synthetic_de, train_and_evaluate, 3, [
+    from eval_de_classifier import (
+        load_de_data, load_synthetic_de, train_and_evaluate,
+        train_with_validation,
+    )
+    return (
+        load_de_data, load_synthetic_de, train_and_evaluate,
+        train_with_validation, 3,
+    ), [
         "negative", "neutral", "positive"]
 
 
@@ -52,6 +64,12 @@ def main():
                         help="evaluation groups to run")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--n_runs", type=int, default=5)
+    parser.add_argument(
+        "--run_offset",
+        type=int,
+        default=0,
+        help="zero-based run offset used to resume an interrupted evaluation",
+    )
     parser.add_argument("--batch_size", type=int, default=1024)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--dropout", type=float, default=0.5)
@@ -60,6 +78,15 @@ def main():
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
+        "--model_selection",
+        choices=["target_test", "source_subject"],
+        default="target_test",
+        help=(
+            "target_test preserves the legacy, label-leaking protocol; "
+            "source_subject holds out one labeled source subject per run"
+        ),
+    )
+    parser.add_argument(
         "--model",
         choices=[
             "dgcnn", "dan", "nsal_dgat", "dgat_bls", "gcbnet", "pgcn",
@@ -67,15 +94,25 @@ def main():
         default="dgcnn",
     )
     args = parser.parse_args()
+    if args.run_offset < 0:
+        parser.error("--run_offset must be non-negative")
     if args.dataset == "seed4" and args.model in ("dan", "nsal_dgat"):
         parser.error(f"{args.model} is currently wired for 3-class SEED DE features")
 
-    (load_de_data, load_synthetic_de, train_and_evaluate,
-     num_classes, class_names) = get_api(args.dataset)
+    ((load_de_data, load_synthetic_de, train_and_evaluate,
+      train_with_validation, num_classes), class_names) = get_api(args.dataset)
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
-    source_x, source_y, target_x, target_y = load_de_data(
+    loaded = load_de_data(
         args.data_root, args.seed, "subject", test_subject=args.test_subject,
+        return_subjects=args.model_selection == "source_subject",
     )
+    if args.model_selection == "source_subject":
+        source_x, source_y, target_x, target_y, source_subjects = loaded
+        validation_subjects = np.unique(source_subjects)
+    else:
+        source_x, source_y, target_x, target_y = loaded
+        source_subjects = None
+        validation_subjects = None
     if "pseudo" in args.methods:
         if args.pseudo_path is None:
             parser.error("--pseudo_path is required when --methods includes pseudo")
@@ -87,8 +124,14 @@ def main():
 
     source_fit_x, source_fit_y = source_x, source_y
     print(f"[Source training] using all {len(source_y)} source samples")
-    print("[Model selection] no source validation split; best epoch is selected "
-          "directly on the target test set")
+    if args.model_selection == "source_subject":
+        print(
+            "[Model selection] one source subject is held out per run; "
+            "target labels are used only for final scoring"
+        )
+    else:
+        print("[Model selection] no source validation split; best epoch is selected "
+              "directly on the target test set")
     requested_pseudo = int(len(source_fit_y) * args.pseudo_ratio)
     requested_syn = (args.num_synthetic if args.num_synthetic is not None
                      else int(len(source_fit_y) * args.syn_ratio))
@@ -110,32 +153,72 @@ def main():
             methods.append(("source+pseudo", pseudo_x, pseudo_y))
         else:
             methods.append(("source+target_adapted_synthetic", syn_x, syn_y))
-    print("[Protocol] target labels are used for best-epoch selection and final scoring")
+    if args.model_selection == "source_subject":
+        print(
+            "[Protocol] transductive target features may be used by adaptation models; "
+            "target labels are used only for final scoring"
+        )
+    else:
+        print("[Protocol] target labels are used for best-epoch selection and final scoring")
     for name, bridge_x, bridge_y in methods:
-        if bridge_y is None:
-            train_x, train_y = source_fit_x, source_fit_y
-        else:
-            train_x = np.concatenate([source_fit_x, bridge_x])
-            train_y = np.concatenate([source_fit_y, bridge_y])
         accs, f1s = [], []
-        print(f"\n{'=' * 64}\n{name}: train={len(train_y)}\n{'=' * 64}")
+        bridge_count = 0 if bridge_y is None else len(bridge_y)
+        print(
+            f"\n{'=' * 64}\n{name}: "
+            f"source={len(source_fit_y)}, bridge={bridge_count}\n{'=' * 64}"
+        )
         for run in range(args.n_runs):
-            print(f"  starting run={run + 1}/{args.n_runs}, epochs<={args.epochs}, "
+            run_index = args.run_offset + run
+            print(f"  starting run={run_index + 1}, epochs<={args.epochs}, "
                   f"batch={args.batch_size}, val_interval={args.val_interval}, "
                   f"patience={args.patience}", flush=True)
-            run_seed = args.seed + run
+            run_seed = args.seed + run_index
             torch.manual_seed(run_seed)
             np.random.seed(run_seed)
-            result = train_and_evaluate(
-                train_x, train_y, target_x, target_y, device,
-                model_type=args.model, epochs=args.epochs,
-                batch_size=args.batch_size, lr=args.lr,
-                dropout=args.dropout, verbose=False,
-                val_interval=args.val_interval, patience=args.patience,
-            )
+            if args.model_selection == "source_subject":
+                validation_subject = validation_subjects[
+                    run_index % len(validation_subjects)
+                ]
+                validation_mask = source_subjects == validation_subject
+                train_x = source_fit_x[~validation_mask]
+                train_y = source_fit_y[~validation_mask]
+                validation_x = source_fit_x[validation_mask]
+                validation_y = source_fit_y[validation_mask]
+                if bridge_y is not None:
+                    train_x = np.concatenate([train_x, bridge_x])
+                    train_y = np.concatenate([train_y, bridge_y])
+                print(
+                    f"  validation_subject={validation_subject}, "
+                    f"train={len(train_y)}, validation={len(validation_y)}",
+                    flush=True,
+                )
+                result = train_with_validation(
+                    train_x, train_y, target_x, target_y,
+                    validation_x, validation_y, device,
+                    model_type=args.model, epochs=args.epochs,
+                    batch_size=args.batch_size, lr=args.lr,
+                    dropout=args.dropout, verbose=False,
+                    val_interval=args.val_interval, patience=args.patience,
+                )
+            else:
+                if bridge_y is None:
+                    train_x, train_y = source_fit_x, source_fit_y
+                else:
+                    train_x = np.concatenate([source_fit_x, bridge_x])
+                    train_y = np.concatenate([source_fit_y, bridge_y])
+                result = train_and_evaluate(
+                    train_x, train_y, target_x, target_y, device,
+                    model_type=args.model, epochs=args.epochs,
+                    batch_size=args.batch_size, lr=args.lr,
+                    dropout=args.dropout, verbose=False,
+                    val_interval=args.val_interval, patience=args.patience,
+                )
             accs.append(result["accuracy"])
             f1s.append(result["f1_macro"])
-            print(f"  run={run + 1}: acc={result['accuracy']:.4f}, f1={result['f1_macro']:.4f}")
+            print(
+                f"  run={run_index + 1}: acc={result['accuracy']:.4f}, "
+                f"f1={result['f1_macro']:.4f}"
+            )
         print(f"  mean: acc={np.mean(accs):.4f}+-{np.std(accs):.4f}, f1={np.mean(f1s):.4f}+-{np.std(f1s):.4f}")
 
 
